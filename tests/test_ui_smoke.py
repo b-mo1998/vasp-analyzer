@@ -181,6 +181,51 @@ def test_inputs_search_reports_matches(window, qtbot, tmp_path):
     assert "1 of" in page._match_label.text()
 
 
+def test_structure_page_renders_a_structure(window, qtbot, tmp_path):
+    directory = tmp_path / "structure"
+    directory.mkdir()
+    fixtures.case_a_complete(directory)
+
+    window.open_directory(directory)
+    window._nav.setCurrentIndex(1)
+    qtbot.wait(150)
+
+    page = window._structure
+    qtbot.waitUntil(lambda: page._structure is not None, timeout=5000)
+    assert page._stack.currentIndex() == 0
+    assert page._view._bonds is not None
+    assert "Atoms:" in page._status.text()
+
+
+def test_structure_page_empty_without_a_structure_file(window, qtbot, tmp_path):
+    directory = tmp_path / "no_structure"
+    directory.mkdir()
+    fixtures.write_eigenval(directory)
+    fixtures.write_incar(directory)
+
+    window.open_directory(directory)
+    window._nav.setCurrentIndex(1)
+    qtbot.wait(150)
+
+    assert window._structure._stack.currentIndex() == 1
+
+
+def test_structure_file_link_navigates_to_inputs(window, qtbot, tmp_path):
+    directory = tmp_path / "linked"
+    directory.mkdir()
+    fixtures.case_a_complete(directory)
+
+    window.open_directory(directory)
+    qtbot.wait(150)
+
+    window._open_input_file("incar")
+    qtbot.wait(80)
+
+    assert window._nav.currentIndex() == 2
+    assert window._inputs._current is not None
+    assert window._inputs._current.role.key == "incar"
+
+
 def test_empty_directory_leaves_the_window_usable(window, qtbot, tmp_path):
     directory = tmp_path / "nothing"
     directory.mkdir()

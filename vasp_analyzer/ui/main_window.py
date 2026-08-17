@@ -32,6 +32,7 @@ from ..services.loader import DataLoader
 from ..services.settings import Settings
 from .pages.bands.page import BandsPage
 from .pages.inputs.page import InputsPage
+from .pages.structure.page import StructurePage
 from .shell.toolbar import PageToolbar
 from .theme import METRICS, SPACING
 from .widgets.info_bar import InfoBar
@@ -108,11 +109,13 @@ class MainWindow(QMainWindow):
         # --- pages ------------------------------------------------------------
         self._bands = BandsPage(self._loader)
         self._register_page(self._bands)
-        self._register_placeholder("Structure")
+        self._structure = StructurePage(self._loader)
+        self._register_page(self._structure)
         self._inputs = InputsPage()
         self._register_page(self._inputs)
 
-        self._nav.setItemEnabled(1, False, "The Structure page is not built yet.")
+        # Clicking a file on the Structure page opens it on the Inputs page.
+        self._structure.navigationRequested.connect(self._open_input_file)
 
         self._connect_toolbar()
 
@@ -256,6 +259,11 @@ class MainWindow(QMainWindow):
 
     def _current_page(self):
         return self._page_stack.currentWidget()
+
+    def _open_input_file(self, role_key: str) -> None:
+        """Jump to the Inputs page with a particular file selected."""
+        self._nav.setCurrentIndex(PAGES.index("Inputs"))
+        self._inputs.show_file(role_key)
 
     # -- toolbar actions -----------------------------------------------------------
 
