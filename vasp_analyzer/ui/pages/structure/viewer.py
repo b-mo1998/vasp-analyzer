@@ -27,6 +27,7 @@ from ....models.structure import StructureData
 from ....resources.elements import covalent_radius
 from ....services.appearance import effective_color
 from ....services.bonds import BondSet, build_sites_and_bonds, unit_cell_edges
+from ....services.slab import VacuumInfo, detect_vacuum, framing_corners
 from ...theme import PALETTE
 from .camera import Camera
 
@@ -98,6 +99,7 @@ class StructureView(QWidget):
 
         self._structure: StructureData | None = None
         self._bonds: BondSet | None = None
+        self._vacuum: VacuumInfo | None = None
         self._camera = Camera()
         self._camera.reset()
         self._options = ViewOptions()
@@ -117,21 +119,27 @@ class StructureView(QWidget):
         self._selected = None
         self._clear_measurement(notify=False)
         self._bonds = None
+        self._vacuum = None
         if structure is not None:
             self._bonds = build_sites_and_bonds(structure)
+            self._vacuum = detect_vacuum(structure)
             # Frame the cell and its real contents. Periodic images are drawn
             # where they fall, but letting them drive the framing would shrink
-            # the cell to a corner whenever bonds cross many faces.
+            # the cell to a corner whenever bonds cross many faces. When a
+            # slab's vacuum gap is detected, the vacuum axis is framed to the
+            # atoms themselves instead of the full (mostly empty) cell — the
+            # true cell is still what gets drawn, only the initial framing
+            # changes, via framing_corners below.
             real = np.array(
                 [site.position for site in self._bonds.sites if not site.is_ghost]
             )
-            corners = np.array(
-                [np.array(bits, dtype=float) @ structure.lattice
-                 for bits in np.ndindex(2, 2, 2)]
-            )
+            corners = framing_corners(structure.lattice, self._vacuum, real)
             self._camera.fit(np.vstack([real, corners]) if real.size else corners)
         self._camera.reset()
         self.update()
+
+    def vacuum_info(self) -> VacuumInfo | None:
+        return self._vacuum
 
     def set_options(self, options: ViewOptions) -> None:
         self._options = options

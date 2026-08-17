@@ -254,6 +254,48 @@ def test_structure_page_renders_a_structure(window, qtbot, tmp_path):
     assert "Atoms:" in page._status.text()
 
 
+def test_slab_vacuum_note_appears_and_tightens_the_camera(window, qtbot, tmp_path):
+    directory = tmp_path / "slab"
+    directory.mkdir()
+    poscar = (
+        "slab\n1.0\n"
+        " 5.0 0.0 0.0\n 0.0 5.0 0.0\n 0.0 0.0 20.0\n"
+        " Si\n 4\nDirect\n"
+        " 0.1 0.1 0.40\n 0.6 0.1 0.42\n 0.1 0.6 0.48\n 0.6 0.6 0.50\n"
+    )
+    (directory / "POSCAR").write_text(poscar)
+
+    window.open_directory(directory)
+    window._nav.setCurrentIndex(0)
+    qtbot.wait(150)
+
+    page = window._structure
+    qtbot.waitUntil(lambda: page._structure is not None, timeout=5000)
+
+    vacuum = page._view.vacuum_info()
+    assert vacuum is not None
+    assert vacuum.axis_name == "c"
+    assert "Vacuum:" in page._status.text()
+    # The camera should be framed on the atoms, nowhere near the full 20 A
+    # vacuum-inclusive cell.
+    assert page._view._camera.extent < 10.0
+
+
+def test_bulk_structure_shows_no_vacuum_note(window, qtbot, tmp_path):
+    directory = tmp_path / "bulk"
+    directory.mkdir()
+    fixtures.case_a_complete(directory)
+
+    window.open_directory(directory)
+    window._nav.setCurrentIndex(0)
+    qtbot.wait(150)
+
+    page = window._structure
+    qtbot.waitUntil(lambda: page._structure is not None, timeout=5000)
+    assert page._view.vacuum_info() is None
+    assert "Vacuum:" not in page._status.text()
+
+
 def test_supercell_tiling_end_to_end(window, qtbot, tmp_path):
     directory = tmp_path / "supercell"
     directory.mkdir()

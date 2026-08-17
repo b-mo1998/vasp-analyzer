@@ -415,6 +415,9 @@ class StructurePage(Page):
         if self._supercell != (1, 1, 1):
             na, nb, nc = self._supercell
             parts.append(f"{na}×{nb}×{nc} supercell")
+        vacuum = self._view.vacuum_info()
+        if vacuum is not None:
+            parts.append(f"Vacuum: {vacuum.vacuum_length:.1f} Å ({vacuum.axis_name})")
         self._status.setText("      ".join(parts))
 
     def _update_legend(self, structure: StructureData) -> None:
