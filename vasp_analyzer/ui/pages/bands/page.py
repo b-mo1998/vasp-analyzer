@@ -40,7 +40,15 @@ from ...widgets.toggle import LabelledToggle
 from ..base import Page
 from .band_plot import BandPlot
 from .dos_plot import DosPlot, nice_upper_bound
-from .export import ExportRequest, build_figure, save_band_csv, save_dos_csv, save_figure
+from .export import (
+    ExportRequest,
+    build_dos_figure,
+    build_figure,
+    save_band_csv,
+    save_dos_csv,
+    save_dos_figure,
+    save_figure,
+)
 from .projection import build_element_overlay, legend_elements
 from .sidebar import BandsSidebar
 
@@ -211,11 +219,31 @@ class BandsPage(Page):
 
         self._apply_capabilities(calculation)
 
+        # DOS (DOSCAR) needs nothing from EIGENVAL and stands alone fine, so
+        # it's requested independent of whether bands are available — it
+        # used to be nested inside the BANDS branch below, which meant a
+        # DOSCAR-without-EIGENVAL calculation never loaded DOS data at all,
+        # silently defeating DOS export/copy for that whole scenario.
+        if calculation.can(Capability.DOS):
+            self._loader.request(DATASET_DOS)
+
         if calculation.can(Capability.BANDS):
             self._stack.setCurrentIndex(0)
             self._loader.request(DATASET_BANDS)
-            if calculation.can(Capability.DOS):
-                self._loader.request(DATASET_DOS)
+        elif calculation.can(Capability.DOS):
+            # No band structure, but DOS works on its own — show the plot
+            # area (with an empty band plot) rather than blocking the whole
+            # page just because EIGENVAL specifically is missing.
+            self._stack.setCurrentIndex(0)
+            self._notice.show_issue(
+                Issue(
+                    code="bands_unavailable_dos_ok",
+                    message=(
+                        f"Band structure unavailable: {calculation.why_not(Capability.BANDS)}"
+                    ),
+                    severity=Severity.INFO,
+                )
+            )
         else:
             self._show_unavailable(
                 "Band structure unavailable",
@@ -224,7 +252,12 @@ class BandsPage(Page):
 
     def _apply_capabilities(self, calculation: Calculation) -> None:
         side = self._sidebar
-        side.set_controls_enabled(calculation.can(Capability.BANDS))
+        # The Y-axis/Fermi sliders drive the energy axis shared by both the
+        # band plot and the DOS panel, so they stay usable whenever either
+        # one has data — not just when bands specifically are available.
+        side.set_controls_enabled(
+            calculation.can(Capability.BANDS) or calculation.can(Capability.DOS)
+        )
 
         fermi = calculation.metadata.e_fermi
         side.set_fermi_range(fermi.value if fermi is not None else None)
@@ -509,19 +542,28 @@ class BandsPage(Page):
         )
 
     def copy_to_clipboard(self) -> bool:
-        if self._bands is None:
+        if self._bands is None and self._dos is None:
             return False
-        figure = build_figure(self._export_request(), width=8.0, height=5.5)
+        request = self._export_request()
+        if self._bands is not None:
+            figure = build_figure(request, width=8.0, height=5.5)
+        else:
+            # Bands-less DOS (DOSCAR without EIGENVAL): copy what's actually
+            # on screen instead of a figure with nothing in it.
+            figure = build_dos_figure(request, width=4.0, height=5.5)
         buffer = io.BytesIO()
         figure.savefig(buffer, format="png", dpi=200, bbox_inches="tight",
                        facecolor="white")
         image = QImage.fromData(buffer.getvalue(), "PNG")
         QGuiApplication.clipboard().setImage(image)
-        log.info("Copied band figure to clipboard")
+        log.info("Copied figure to clipboard")
         return True
 
     def export(self) -> None:
-        if self._bands is None:
+        # Bands-less DOS (DOSCAR without EIGENVAL) is a real, supported case —
+        # exporting shouldn't require bands to exist, only whichever of the
+        # two the user is actually trying to save.
+        if self._bands is None and self._dos is None:
             return
         calculation = self.calculation()
         stem = calculation.directory.name if calculation is not None else "bands"
@@ -529,7 +571,7 @@ class BandsPage(Page):
 
         filters = (
             "PNG image (*.png);;SVG vector (*.svg);;PDF document (*.pdf);;"
-            "Band data (*.csv);;DOS data (*.csv)"
+            "DOS image (*.png);;Band data (*.csv);;DOS data (*.csv)"
         )
         path_text, selected = QFileDialog.getSaveFileName(
             self, "Export Bands", suggested, filters
@@ -541,6 +583,15 @@ class BandsPage(Page):
         request = self._export_request()
         try:
             if selected.startswith("Band data"):
+                if request.bands is None:
+                    self._notice.show_issue(
+                        Issue(
+                            code="band_export_unavailable",
+                            message="There is no band data to export.",
+                            severity=Severity.INFO,
+                        )
+                    )
+                    return
                 save_band_csv(request, path.with_suffix(".csv"))
             elif selected.startswith("DOS data"):
                 if request.dos is None:
@@ -553,8 +604,23 @@ class BandsPage(Page):
                     )
                     return
                 save_dos_csv(request, path.with_suffix(".csv"))
-            else:
+            elif selected.startswith("DOS image"):
+                if request.dos is None:
+                    self._notice.show_issue(
+                        Issue(
+                            code="dos_export_unavailable",
+                            message="There is no DOS data to export.",
+                            severity=Severity.INFO,
+                        )
+                    )
+                    return
+                save_dos_figure(request, path)
+            elif request.bands is not None:
                 save_figure(request, path)
+            else:
+                # No bands at all: the combined figure has nothing to show,
+                # so fall back to exactly what the DOS image option would do.
+                save_dos_figure(request, path)
         except Exception as exc:  # noqa: BLE001 - report, never crash the GUI
             log.exception("Export failed")
             self._notice.show_issue(

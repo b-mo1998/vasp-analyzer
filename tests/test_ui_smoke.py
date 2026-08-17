@@ -124,10 +124,34 @@ def test_bands_page_shows_data_when_available(window, qtbot, tmp_path):
     assert page._stack.currentIndex() == 0, "the plot, not the empty state"
 
 
-def test_bands_page_shows_empty_state_without_eigenval(window, qtbot, tmp_path):
+def test_bands_page_shows_dos_only_without_eigenval(window, qtbot, tmp_path):
+    """Case C (DOSCAR without EIGENVAL): DOS stands alone fine and needs
+    nothing from EIGENVAL, so the page shows the plot area (DOS working,
+    band plot empty) with an explanatory notice — not the full-page
+    "unavailable" block, which used to fire for any missing EIGENVAL
+    regardless of what else was available."""
     directory = tmp_path / "no_bands"
     directory.mkdir()
     fixtures.case_c_no_eigenval(directory)
+
+    window.open_directory(directory)
+    qtbot.wait(150)
+
+    page = window._bands
+    assert page._stack.currentIndex() == 0, "the plot area, not the empty state"
+    qtbot.waitUntil(lambda: page._dos is not None, timeout=3000)
+    assert page._bands is None
+    # isVisible() needs the window to actually be shown on screen, which this
+    # fixture deliberately doesn't do; the page's own tracked state is the
+    # thing that actually matters here.
+    assert page._dos_visible is True
+    assert not page._dos_card.isHidden()
+
+
+def test_bands_page_shows_empty_state_with_neither_bands_nor_dos(window, qtbot, tmp_path):
+    directory = tmp_path / "truly_empty"
+    directory.mkdir()
+    fixtures.case_d_structure_only(directory)  # POSCAR + INCAR only
 
     window.open_directory(directory)
     qtbot.wait(150)
@@ -147,6 +171,58 @@ def test_dos_controls_disabled_without_doscar(window, qtbot, tmp_path):
     assert not page._sidebar.show_dos.isEnabled()
     assert "DOSCAR" in page._sidebar.show_dos.toolTip()
     assert not page._dos_card.isVisible()
+
+
+def test_dos_export_and_copy_work_without_eigenval(window, qtbot, tmp_path, monkeypatch):
+    """DOSCAR without EIGENVAL (Case C): export()/copy_to_clipboard() used to
+    bail out unconditionally whenever bands were absent, even though DOS
+    alone is perfectly exportable."""
+    from PySide6.QtWidgets import QFileDialog
+
+    directory = tmp_path / "dos_only"
+    directory.mkdir()
+    fixtures.case_c_no_eigenval(directory)
+
+    window.open_directory(directory)
+    qtbot.wait(150)
+
+    page = window._bands
+    qtbot.waitUntil(lambda: page._dos is not None, timeout=3000)
+    assert page._bands is None
+
+    assert page.copy_to_clipboard() is True
+
+    out_path = tmp_path / "dos-export.png"
+    monkeypatch.setattr(
+        QFileDialog,
+        "getSaveFileName",
+        staticmethod(lambda *a, **k: (str(out_path), "DOS image (*.png)")),
+    )
+    page.export()
+    assert out_path.exists()
+
+
+def test_export_is_a_no_op_with_neither_bands_nor_dos(window, qtbot, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QFileDialog
+
+    directory = tmp_path / "neither"
+    directory.mkdir()
+    fixtures.case_d_structure_only(directory)  # POSCAR + INCAR only
+
+    window.open_directory(directory)
+    qtbot.wait(100)
+
+    page = window._bands
+    assert page.copy_to_clipboard() is False
+
+    called = []
+    monkeypatch.setattr(
+        QFileDialog,
+        "getSaveFileName",
+        staticmethod(lambda *a, **k: called.append(1) or ("", "")),
+    )
+    page.export()
+    assert not called, "the file dialog should never open with nothing to export"
 
 
 def test_inputs_page_lists_and_opens_a_file(window, qtbot, tmp_path):

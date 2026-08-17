@@ -150,6 +150,31 @@ def save_figure(request: ExportRequest, path: Path) -> None:
     log.info("Exported figure to %s", path)
 
 
+def build_dos_figure(request: ExportRequest, width: float = 4.0, height: float = 6.0) -> Figure:
+    """A standalone DOS figure — just the density of states, at its own size
+    and with its own axis labels, rather than the narrow side panel
+    build_figure() draws alongside the bands."""
+    figure = Figure(figsize=(width, height), dpi=300, facecolor="white")
+    axes = figure.subplots(1, 1)
+    _draw_dos(axes, request)
+    axes.set_ylabel("Energy (eV)")
+    axes.set_ylim(request.y_min, request.y_max)
+    axes.yaxis.set_major_locator(MaxNLocator(nbins=5, steps=[1, 2, 2.5, 5, 10]))
+
+    if request.title:
+        figure.suptitle(request.title, fontsize=11, y=0.98)
+    figure.tight_layout()
+    return figure
+
+
+def save_dos_figure(request: ExportRequest, path: Path) -> None:
+    if request.dos is None:
+        raise ValueError("no DOS data to export")
+    figure = build_dos_figure(request)
+    figure.savefig(path, bbox_inches="tight", facecolor="white")
+    log.info("Exported DOS figure to %s", path)
+
+
 def save_band_csv(request: ExportRequest, path: Path) -> None:
     """Write the plotted eigenvalues as CSV, referenced exactly as displayed."""
     bands = request.bands
