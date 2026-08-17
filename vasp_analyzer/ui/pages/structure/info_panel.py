@@ -188,6 +188,22 @@ class StructureInfoPanel(QWidget):
         self._atom_card.hide()
         layout.addWidget(self._atom_card)
 
+        # --- measurement -------------------------------------------------------
+        self._measure_card = Card()
+        measure_body = self._measure_card.body()
+        measure_body.addWidget(ThemedLabel("Measurement", "CardTitle"))
+        self._measure_value = QLabel("—")
+        self._measure_value.setStyleSheet("font-weight: 600; font-size: 20px;")
+        measure_body.addWidget(self._measure_value)
+        self._measure_detail = QLabel("")
+        self._measure_detail.setStyleSheet(f"color: {PALETTE.text_secondary};")
+        measure_body.addWidget(self._measure_detail)
+        hint = QLabel("Right-click or Esc to clear")
+        hint.setStyleSheet(f"color: {PALETTE.text_tertiary}; font-size: {TYPE.small}px;")
+        measure_body.addWidget(hint)
+        self._measure_card.hide()
+        layout.addWidget(self._measure_card)
+
         # --- input files -------------------------------------------------------
         self._files_card = Card()
         self._files_body = self._files_card.body()
@@ -203,6 +219,7 @@ class StructureInfoPanel(QWidget):
         for row in self._rows.values():
             row.set_value("—", muted=True)
         self._atom_card.hide()
+        self._measure_card.hide()
         self._clear_files()
 
     def update_structure(
@@ -249,6 +266,21 @@ class StructureInfoPanel(QWidget):
             f"{cart[0]:.3f}, {cart[1]:.3f}, {cart[2]:.3f}"
         )
         self._atom_card.show()
+
+    def show_measurement(self, measurement) -> None:
+        if measurement is None:
+            self._measure_card.hide()
+            return
+
+        if measurement.kind == "distance":
+            a, b = measurement.symbols
+            self._measure_value.setText(f"{measurement.value:.4f} Å")
+            self._measure_detail.setText(f"{a} – {b}")
+        else:
+            a, b, c = measurement.symbols
+            self._measure_value.setText(f"{measurement.value:.2f}°")
+            self._measure_detail.setText(f"{a} – {b} – {c}")
+        self._measure_card.show()
 
     def update_files(self, calculation: Calculation | None) -> None:
         self._clear_files()

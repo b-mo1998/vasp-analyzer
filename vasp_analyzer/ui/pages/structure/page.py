@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import QEvent, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QGuiApplication, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
@@ -32,6 +34,7 @@ from ...widgets.notice import Notice
 from ...widgets.primitives import Card
 from ...widgets.segmented import SegmentedControl
 from ..base import Page
+from .export import save_cif, save_poscar
 from .info_panel import StructureInfoPanel
 from .sidebar import StructureSidebar
 from .viewer import StructureView, ViewOptions
@@ -95,6 +98,12 @@ TOOLS = [
     ("select", "select.svg", "Select atoms", StructureView.MODE_SELECT),
     ("rotate", "rotate.svg", "Rotate", StructureView.MODE_ROTATE),
     ("pan", "pan.svg", "Pan", StructureView.MODE_PAN),
+    (
+        "measure",
+        "measure.svg",
+        "Measure — click two atoms for a distance, three for an angle",
+        StructureView.MODE_MEASURE,
+    ),
 ]
 
 
@@ -261,6 +270,7 @@ class StructurePage(Page):
         side.showCellChanged.connect(self._on_options_changed)
         side.showAxesChanged.connect(self._on_options_changed)
         self._view.atomSelected.connect(self._on_atom_selected)
+        self._view.measurementChanged.connect(self._info.show_measurement)
         self._info.fileRequested.connect(self.navigationRequested)
 
     def eventFilter(self, watched, event):  # noqa: N802 - Qt naming
@@ -425,6 +435,7 @@ class StructurePage(Page):
         self._projection.setCurrentIndex(0)
         self._on_options_changed()
         self._view.reset_view()
+        self._view._clear_measurement()
         self._info.show_atom(self._structure, None)
 
     def _render_pixmap(self, scale: int = 2) -> QPixmap | None:
@@ -452,22 +463,34 @@ class StructurePage(Page):
             return
         calculation = self.calculation()
         stem = calculation.directory.name if calculation is not None else "structure"
-        path_text, _ = QFileDialog.getSaveFileName(
-            self,
-            "Export Structure Image",
-            str((calculation.directory if calculation else "") or "") + f"/{stem}-structure.png",
-            "PNG image (*.png)",
+        suggested = str(
+            (calculation.directory if calculation else Path.home()) / f"{stem}-structure.png"
+        )
+
+        filters = "PNG image (*.png);;CIF file (*.cif);;VASP POSCAR (*.vasp)"
+        path_text, selected = QFileDialog.getSaveFileName(
+            self, "Export Structure", suggested, filters
         )
         if not path_text:
             return
-        pixmap = self._view.grab()
-        if not pixmap.save(path_text):
+
+        path = Path(path_text)
+        try:
+            if selected.startswith("CIF"):
+                save_cif(self._structure, path.with_suffix(".cif"))
+            elif selected.startswith("VASP"):
+                save_poscar(self._structure, path.with_suffix(".vasp"))
+            else:
+                if not self._view.grab().save(str(path)):
+                    raise OSError("QPixmap.save returned False")
+            log.info("Exported structure to %s", path)
+        except OSError as exc:
+            log.exception("Structure export failed")
             self._notice.show_issue(
                 Issue(
                     code="export_failed",
-                    message="The image could not be written.",
+                    message="The file could not be written.",
+                    detail=str(exc),
                     severity=Severity.ERROR,
                 )
             )
-        else:
-            log.info("Exported structure image to %s", path_text)

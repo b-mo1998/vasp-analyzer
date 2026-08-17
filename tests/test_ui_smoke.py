@@ -254,6 +254,31 @@ def test_structure_page_renders_a_structure(window, qtbot, tmp_path):
     assert "Atoms:" in page._status.text()
 
 
+def test_measure_toolbar_button_switches_the_viewer_mode(window, qtbot, tmp_path):
+    from vasp_analyzer.ui.pages.structure.viewer import StructureView
+
+    directory = tmp_path / "measure_button"
+    directory.mkdir()
+    fixtures.case_a_complete(directory)
+
+    window.open_directory(directory)
+    window._nav.setCurrentIndex(0)
+    qtbot.wait(150)
+
+    page = window._structure
+    qtbot.waitUntil(lambda: page._structure is not None, timeout=5000)
+    assert page._view.mode() == StructureView.MODE_ROTATE  # the default tool
+
+    measure_button = next(
+        page._tool_group.button(i)
+        for i in range(len(page._tool_group.buttons()))
+        if page._tool_group.button(i).property("mode") == StructureView.MODE_MEASURE
+    )
+    measure_button.click()
+
+    assert page._view.mode() == StructureView.MODE_MEASURE
+
+
 def test_structure_atom_color_override_updates_the_legend_and_view(window, qtbot, tmp_path):
     from vasp_analyzer.services import appearance
     from vasp_analyzer.ui.pages.structure.page import _ElementSwatch

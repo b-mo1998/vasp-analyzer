@@ -37,6 +37,8 @@ CELL_COLOR = "#9aa0a6"
 GHOST_ALPHA = 120
 
 AXIS_COLORS = {"a": "#e5484d", "b": "#30a46c", "c": "#3b82f6"}
+MEASURE_COLOR = "#f59e0b"
+MAX_MEASURE_POINTS = 3
 
 
 @dataclass
@@ -48,15 +50,44 @@ class ViewOptions:
     perspective: bool = True
 
 
+@dataclass(frozen=True)
+class Measurement:
+    """A distance (two atoms) or an angle (three atoms), in the crystal's own
+    cartesian frame — measured directly from the same site positions the
+    viewer draws, so it matches what's on screen exactly, ghosts included."""
+
+    kind: str            # "distance" or "angle"
+    value: float          # Å for a distance, degrees for an angle
+    symbols: list[str]    # element symbols in click order
+
+
+def _measure(positions: list[np.ndarray], symbols: list[str]) -> Measurement | None:
+    if len(positions) == 2:
+        distance = float(np.linalg.norm(positions[1] - positions[0]))
+        return Measurement(kind="distance", value=distance, symbols=symbols)
+    if len(positions) == 3:
+        v1 = positions[0] - positions[1]
+        v2 = positions[2] - positions[1]
+        denom = np.linalg.norm(v1) * np.linalg.norm(v2)
+        if denom < 1e-12:
+            return None
+        cosine = np.clip(np.dot(v1, v2) / denom, -1.0, 1.0)
+        angle = float(np.degrees(np.arccos(cosine)))
+        return Measurement(kind="angle", value=angle, symbols=symbols)
+    return None
+
+
 class StructureView(QWidget):
     """Draws a structure and handles orbit / pan / zoom / pick."""
 
-    atomSelected = Signal(object)   # site index in the source structure, or None
+    atomSelected = Signal(object)        # site index in the source structure, or None
+    measurementChanged = Signal(object)  # Measurement, or None when cleared
     viewChanged = Signal()
 
     MODE_SELECT = "select"
     MODE_ROTATE = "rotate"
     MODE_PAN = "pan"
+    MODE_MEASURE = "measure"
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -73,6 +104,7 @@ class StructureView(QWidget):
         self._mode = self.MODE_ROTATE
         self._selected: int | None = None
         self._hovered: int | None = None
+        self._measure_points: list[int] = []  # site indices, in click order
         self._last_mouse: QPointF | None = None
         self._screen_cache: np.ndarray | None = None
         self._radius_cache: np.ndarray | None = None
@@ -83,6 +115,7 @@ class StructureView(QWidget):
     def set_structure(self, structure: StructureData | None) -> None:
         self._structure = structure
         self._selected = None
+        self._clear_measurement(notify=False)
         self._bonds = None
         if structure is not None:
             self._bonds = build_sites_and_bonds(structure)
@@ -109,11 +142,14 @@ class StructureView(QWidget):
         return self._options
 
     def set_mode(self, mode: str) -> None:
+        if self._mode == self.MODE_MEASURE and mode != self.MODE_MEASURE:
+            self._clear_measurement()
         self._mode = mode
         cursors = {
             self.MODE_SELECT: Qt.ArrowCursor,
             self.MODE_ROTATE: Qt.OpenHandCursor,
             self.MODE_PAN: Qt.SizeAllCursor,
+            self.MODE_MEASURE: Qt.CrossCursor,
         }
         self.setCursor(cursors.get(mode, Qt.ArrowCursor))
 
@@ -125,6 +161,30 @@ class StructureView(QWidget):
 
     def selected_index(self) -> int | None:
         return self._selected
+
+    # -- measurement ----------------------------------------------------------
+
+    def _clear_measurement(self, notify: bool = True) -> None:
+        if not self._measure_points:
+            return
+        self._measure_points = []
+        self.update()
+        if notify:
+            self.measurementChanged.emit(None)
+
+    def _add_measure_point(self, site_index: int) -> None:
+        assert self._bonds is not None
+        if len(self._measure_points) >= MAX_MEASURE_POINTS:
+            self._measure_points = []
+        self._measure_points.append(site_index)
+
+        result: Measurement | None = None
+        if len(self._measure_points) >= 2:
+            sites = [self._bonds.sites[i] for i in self._measure_points]
+            result = _measure([s.position for s in sites], [s.symbol for s in sites])
+
+        self.update()
+        self.measurementChanged.emit(result)
 
     def reset_view(self) -> None:
         self._camera.reset()
@@ -198,6 +258,9 @@ class StructureView(QWidget):
 
         if self._options.show_axes:
             self._draw_axes(painter)
+
+        if self._measure_points:
+            self._draw_measurement(painter)
 
         painter.end()
 
@@ -336,6 +399,56 @@ class StructureView(QWidget):
             )
         painter.restore()
 
+    def _draw_measurement(self, painter: QPainter) -> None:
+        """Numbered badges at each clicked site, a connecting line (or two,
+        for an angle), and the resulting distance/angle drawn near it. Always
+        painted last, on top of everything else — a measurement in progress
+        should never get lost behind an atom."""
+        assert self._bonds is not None
+        if self._screen_cache is None:
+            return
+
+        points = [
+            (i, self._screen_cache[i]) for i in self._measure_points if i < len(self._screen_cache)
+        ]
+        if not points:
+            return
+
+        pen = QPen(QColor(MEASURE_COLOR), 1.6)
+        pen.setDashPattern([4.0, 3.0])
+        pen.setCapStyle(Qt.RoundCap)
+        painter.setPen(pen)
+        for (_, a), (_, b) in zip(points, points[1:]):
+            painter.drawLine(QPointF(float(a[0]), float(a[1])), QPointF(float(b[0]), float(b[1])))
+
+        painter.setPen(QPen(QColor("#ffffff"), 1.0))
+        painter.setBrush(QColor(MEASURE_COLOR))
+        for order, (_, screen_pos) in enumerate(points, start=1):
+            centre = QPointF(float(screen_pos[0]), float(screen_pos[1]))
+            painter.drawEllipse(centre, 8.0, 8.0)
+            painter.drawText(QRectF(centre - QPointF(8, 8), centre + QPointF(8, 8)), Qt.AlignCenter, str(order))
+
+        sites = [self._bonds.sites[i] for i in self._measure_points]
+        result = _measure([s.position for s in sites], [s.symbol for s in sites])
+        if result is None:
+            return
+
+        label = f"{result.value:.3f} Å" if result.kind == "distance" else f"{result.value:.1f}°"
+        if result.kind == "distance":
+            anchor = (points[0][1] + points[1][1]) / 2.0
+        else:
+            anchor = points[1][1]  # the vertex
+
+        text_pos = QPointF(float(anchor[0]) + 12, float(anchor[1]) - 12)
+        metrics = painter.fontMetrics()
+        rect = metrics.boundingRect(label).adjusted(-5, -3, 5, 3)
+        rect.moveTopLeft((text_pos - QPointF(0, rect.height())).toPoint())
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(26, 26, 26, 215))
+        painter.drawRoundedRect(rect, 4, 4)
+        painter.setPen(QColor("#ffffff"))
+        painter.drawText(rect, Qt.AlignCenter, label)
+
     # -- interaction ---------------------------------------------------------------
 
     def _pick(self, position: QPointF) -> int | None:
@@ -363,6 +476,13 @@ class StructureView(QWidget):
                 self._selected = self._bonds.sites[hit].index
                 self.atomSelected.emit(self._selected)
             self.update()
+        elif self._mode == self.MODE_MEASURE:
+            if event.button() == Qt.RightButton:
+                self._clear_measurement()
+            elif event.button() == Qt.LeftButton:
+                hit = self._pick(event.position())
+                if hit is not None:
+                    self._add_measure_point(hit)
         elif self._mode == self.MODE_ROTATE:
             self.setCursor(Qt.ClosedHandCursor)
 
@@ -388,7 +508,7 @@ class StructureView(QWidget):
             return
 
         self._last_mouse = position
-        if self._mode == self.MODE_SELECT:
+        if self._mode in (self.MODE_SELECT, self.MODE_MEASURE):
             hovered = self._pick(position)
             if hovered != self._hovered:
                 self._hovered = hovered
@@ -408,3 +528,9 @@ class StructureView(QWidget):
 
     def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802 - Qt naming
         self.reset_view()
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        if event.key() == Qt.Key_Escape and self._measure_points:
+            self._clear_measurement()
+            return
+        super().keyPressEvent(event)
