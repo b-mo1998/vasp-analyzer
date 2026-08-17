@@ -31,6 +31,7 @@ from ..services.discovery import discover
 from ..services.loader import DataLoader
 from ..services.settings import Settings
 from .pages.bands.page import BandsPage
+from .pages.inputs.page import InputsPage
 from .shell.toolbar import PageToolbar
 from .theme import METRICS, SPACING
 from .widgets.info_bar import InfoBar
@@ -108,10 +109,10 @@ class MainWindow(QMainWindow):
         self._bands = BandsPage(self._loader)
         self._register_page(self._bands)
         self._register_placeholder("Structure")
-        self._register_placeholder("Inputs")
+        self._inputs = InputsPage()
+        self._register_page(self._inputs)
 
         self._nav.setItemEnabled(1, False, "The Structure page is not built yet.")
-        self._nav.setItemEnabled(2, False, "The Inputs page is not built yet.")
 
         self._connect_toolbar()
 

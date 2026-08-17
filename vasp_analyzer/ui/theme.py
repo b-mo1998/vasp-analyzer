@@ -55,7 +55,7 @@ class Radius:
 class Typography:
     # Qt resolves the empty family to the macOS system font (SF).
     ui_family: str = ""
-    mono_family: str = "SF Mono, Menlo, monospace"
+    mono_family: str = "Menlo, Monaco, monospace"
     plot_family: str = "Helvetica Neue"
 
     title: int = 22

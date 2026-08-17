@@ -24,8 +24,9 @@ from vasp_analyzer.ui.style import build_stylesheet  # noqa: E402
 def main() -> int:
     directory = Path(sys.argv[1]) if len(sys.argv) > 1 else None
     output = Path(sys.argv[2]) if len(sys.argv) > 2 else Path("window.png")
-    width = int(sys.argv[3]) if len(sys.argv) > 3 else 1440
-    height = int(sys.argv[4]) if len(sys.argv) > 4 else 900
+    page = int(sys.argv[3]) if len(sys.argv) > 3 else 0
+    width = int(sys.argv[4]) if len(sys.argv) > 4 else 1440
+    height = int(sys.argv[5]) if len(sys.argv) > 5 else 900
 
     configure_logging(console=False)
     app = QApplication(sys.argv[:1])
@@ -39,6 +40,8 @@ def main() -> int:
 
     if directory is not None:
         window.open_directory(directory)
+    if page:
+        window._nav.setCurrentIndex(page)
 
     def capture() -> None:
         # Let queued work (background parsing, deferred redraws) settle first.
