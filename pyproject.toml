@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vasp-analyzer"
+version = "0.1.0"
+description = "Desktop application for inspecting and visualising VASP and Wannier90 calculations"
+requires-python = ">=3.11"
+dependencies = [
+    "PySide6>=6.9",
+    "numpy>=2.0",
+    "matplotlib>=3.9",
+    "pymatgen-core>=2026.4",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-qt>=4.4"]
+materials-project = ["mp-api>=0.45", "keyring>=25.0"]
+
+[project.gui-scripts]
+vasp-analyzer = "vasp_analyzer.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["vasp_analyzer*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]
