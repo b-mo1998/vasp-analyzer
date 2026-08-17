@@ -37,7 +37,27 @@ def _style(qapp):
 @pytest.fixture
 def window(qtbot, monkeypatch, tmp_path):
     # Keep the test run out of the user's real settings and recent list.
+    #
+    # Patching individual Settings methods isn't enough on its own: the base
+    # class still opens the OS's real native preference store underneath
+    # (QSettings(ORGANISATION, APPLICATION)), and services.appearance holds
+    # its own separate Settings() built from that same real store — bound at
+    # import time, so it is untouched by a monkeypatch on the Settings class
+    # itself. Redirecting QSettings to a temp-file-backed store is the one
+    # interception point that reliably isolates every path that opens one.
+    from PySide6.QtCore import QSettings
+
+    from vasp_analyzer.services import appearance
     from vasp_analyzer.services import settings as settings_module
+
+    ini_path = str(tmp_path / "test_settings.ini")
+    monkeypatch.setattr(
+        settings_module,
+        "QSettings",
+        lambda *a, **k: QSettings(ini_path, QSettings.IniFormat),
+    )
+    monkeypatch.setattr(appearance, "_settings", None)
+    monkeypatch.setattr(appearance, "_overrides", {})
 
     class _IsolatedSettings(settings_module.Settings):
         def __init__(self) -> None:
@@ -181,6 +201,43 @@ def test_inputs_search_reports_matches(window, qtbot, tmp_path):
     assert "1 of" in page._match_label.text()
 
 
+def test_element_projection_end_to_end(window, qtbot, tmp_path):
+    directory = tmp_path / "projection"
+    directory.mkdir()
+    fixtures.write_eigenval(directory, n_kpoints=6, n_bands=4, n_electrons=8, n_ions=2)
+    fixtures.write_poscar(directory, atoms=2)
+    fixtures.write_procar(directory, n_kpoints=6, n_bands=4, n_ions=2)
+
+    window.open_directory(directory)
+    qtbot.wait(150)
+
+    page = window._bands
+    checkbox = page._sidebar.projections["element"]
+    assert checkbox.isEnabled(), "PROCAR is present and matches EIGENVAL"
+
+    checkbox.setChecked(True)
+    qtbot.waitUntil(lambda: page._band_plot._projection is not None, timeout=3000)
+    # write_poscar's default fixture is silicon.
+    assert page._legend._entries.keys() & {"element:Si"}
+
+    checkbox.setChecked(False)
+    assert page._band_plot._projection is None
+    assert not (page._legend._entries.keys() & {"element:Si"})
+
+
+def test_element_projection_unavailable_without_matching_procar(window, qtbot, tmp_path):
+    directory = tmp_path / "no_procar"
+    directory.mkdir()
+    fixtures.case_b_bands_only(directory)  # EIGENVAL + POSCAR, no PROCAR
+
+    window.open_directory(directory)
+    qtbot.wait(150)
+
+    checkbox = window._bands._sidebar.projections["element"]
+    assert not checkbox.isEnabled()
+    assert "PROCAR" in checkbox.toolTip()
+
+
 def test_structure_page_renders_a_structure(window, qtbot, tmp_path):
     directory = tmp_path / "structure"
     directory.mkdir()
@@ -195,6 +252,35 @@ def test_structure_page_renders_a_structure(window, qtbot, tmp_path):
     assert page._stack.currentIndex() == 0
     assert page._view._bonds is not None
     assert "Atoms:" in page._status.text()
+
+
+def test_structure_atom_color_override_updates_the_legend_and_view(window, qtbot, tmp_path):
+    from vasp_analyzer.services import appearance
+    from vasp_analyzer.ui.pages.structure.page import _ElementSwatch
+
+    directory = tmp_path / "colors"
+    directory.mkdir()
+    fixtures.case_a_complete(directory)
+
+    window.open_directory(directory)
+    window._nav.setCurrentIndex(1)
+    qtbot.wait(150)
+
+    page = window._structure
+    qtbot.waitUntil(lambda: page._structure is not None, timeout=5000)
+
+    swatches = page._legend.findChildren(_ElementSwatch)
+    assert swatches, "the legend should list at least one element"
+    swatch = swatches[0]
+
+    # The modal QColorDialog can't be driven in a headless test; exercise the
+    # same code path _pick_color would take after a colour is chosen.
+    appearance.set_override(swatch._element, "#ff8800")
+    swatch._apply_style()
+    swatch.changed.emit()
+
+    assert appearance.effective_color(swatch._element) == "#ff8800"
+    assert "#ff8800" in swatch.styleSheet()
 
 
 def test_structure_page_empty_without_a_structure_file(window, qtbot, tmp_path):

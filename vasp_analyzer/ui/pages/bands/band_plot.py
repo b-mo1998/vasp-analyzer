@@ -9,6 +9,7 @@ from matplotlib.ticker import MaxNLocator
 from ....models.bands import BandData
 from ...plotting import GUIDE_COLOR, PixelMargins, PlotCanvas
 from ...theme import PALETTE
+from .projection import ProjectionOverlay
 
 BAND_MARGINS = PixelMargins(left=62, right=14, top=12, bottom=42)
 
@@ -29,6 +30,7 @@ class BandPlot(PlotCanvas):
         super().__init__(BAND_MARGINS)
         self._bands: BandData | None = None
         self._wannier: tuple[np.ndarray, np.ndarray] | None = None
+        self._projection: ProjectionOverlay | None = None
         self._reference = 0.0
         self._ylimits = (-10.0, 10.0)
         self._collections: list[LineCollection] = []
@@ -52,6 +54,12 @@ class BandPlot(PlotCanvas):
 
     def set_wannier(self, x: np.ndarray | None, energies: np.ndarray | None) -> None:
         self._wannier = None if x is None or energies is None else (x, energies)
+        self._rebuild()
+
+    def set_projection(self, overlay: ProjectionOverlay | None) -> None:
+        """Show (or clear) a fatbands overlay — coloured, sized markers layered
+        over the base band lines, e.g. from PROCAR element projection."""
+        self._projection = overlay
         self._rebuild()
 
     def set_reference(self, reference: float) -> None:
@@ -96,10 +104,17 @@ class BandPlot(PlotCanvas):
         # are adjacent in reciprocal space. That is true along a band path and
         # false for a Monkhorst-Pack or Γ-centred mesh, where the list is an
         # unordered set of irreducible points — so a mesh is drawn as points.
+        #
+        # With a projection overlay active, the base bands step back to a thin
+        # grey skeleton so the coloured, weight-sized dots read as the primary
+        # signal — the standard "fatbands" look — rather than competing with a
+        # bold accent-blue line underneath them.
+        has_projection = self._projection is not None
         spin_colors = [PALETTE.accent, "#7c3aed"]
+        base_alpha = 0.35 if has_projection else 1.0
         for spin in range(bands.n_spin):
             energies = bands.energies[spin] - self._reference  # (nk, nbands)
-            color = spin_colors[min(spin, len(spin_colors) - 1)]
+            color = GUIDE_COLOR if has_projection else spin_colors[min(spin, len(spin_colors) - 1)]
 
             if bands.is_line_mode:
                 segments = [
@@ -112,6 +127,7 @@ class BandPlot(PlotCanvas):
                     linewidths=1.1,
                     zorder=3,
                     capstyle="round",
+                    alpha=base_alpha,
                 )
                 axes.add_collection(collection)
                 self._collections.append(collection)
@@ -123,8 +139,23 @@ class BandPlot(PlotCanvas):
                     marker=".",
                     markersize=1.6,
                     color=color,
-                    alpha=0.65,
+                    alpha=0.65 * base_alpha,
                     zorder=3,
+                    rasterized=True,
+                )
+
+        # --- Projection overlay (fatbands) ----------------------------------
+        if has_projection:
+            for spin in range(min(bands.n_spin, len(self._projection.colors))):
+                energies = bands.energies[spin] - self._reference
+                X = np.repeat(x[:, None], bands.n_bands, axis=1)
+                axes.scatter(
+                    X.ravel(),
+                    energies.ravel(),
+                    s=self._projection.sizes[spin].ravel(),
+                    c=self._projection.colors[spin].reshape(-1, 4),
+                    zorder=5,
+                    linewidths=0,
                     rasterized=True,
                 )
 

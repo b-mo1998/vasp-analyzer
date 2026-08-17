@@ -19,6 +19,7 @@ from ..models.files import FileIndex, FileStatus
 from ..models.metadata import Provenance, Sourced
 from ..parsers.doscar import peek_doscar_header
 from ..parsers.eigenval import peek_eigenval_header
+from ..parsers.procar import peek_procar_header
 
 log = get_logger("services.validation")
 
@@ -29,6 +30,7 @@ FERMI_DISAGREEMENT_EV = 0.05
 class ConsistencyReport:
     outcar_trusted: bool = True
     doscar_trusted: bool = True
+    procar_trusted: bool = True
     fermi_candidate: Sourced[float] | None = None
     mismatches: list[str] = field(default_factory=list)
 
@@ -144,6 +146,58 @@ def validate_consistency(
                     source="DOSCAR",
                 )
             )
+
+    # --- Does PROCAR describe this calculation? ----------------------------
+    procar_path = index.path_for("procar")
+    if procar_path:
+        procar_header = peek_procar_header(procar_path)
+        if procar_header is None:
+            entry = index.entries.get("procar")
+            if entry:
+                entry.status = FileStatus.MALFORMED
+                entry.note = "PROCAR header could not be read."
+            issues.append(
+                Issue(
+                    code="procar_malformed",
+                    message="PROCAR was found but could not be parsed.",
+                    severity=Severity.WARNING,
+                    source="PROCAR",
+                )
+            )
+        else:
+            mismatches: list[str] = []
+            if eig_header is not None:
+                if procar_header.n_bands != eig_header.n_bands:
+                    mismatches.append(
+                        _describe("NBANDS", eig_header.n_bands, procar_header.n_bands)
+                    )
+                if procar_header.n_kpoints != eig_header.n_kpoints:
+                    mismatches.append(
+                        _describe("NKPTS", eig_header.n_kpoints, procar_header.n_kpoints)
+                    )
+            if structure is not None and procar_header.n_ions != structure.n_atoms:
+                mismatches.append(
+                    _describe("ion count", structure.n_atoms, procar_header.n_ions)
+                )
+
+            if mismatches:
+                report.procar_trusted = False
+                entry = index.entries.get("procar")
+                if entry:
+                    entry.status = FileStatus.INCONSISTENT
+                    entry.note = "Describes a different calculation."
+                issues.append(
+                    Issue(
+                        code="procar_inconsistent",
+                        message=(
+                            "PROCAR describes a different calculation and was ignored."
+                        ),
+                        detail="Mismatched: " + "; ".join(mismatches),
+                        severity=Severity.WARNING,
+                        source="PROCAR",
+                    )
+                )
+                log.warning("PROCAR rejected as inconsistent: %s", "; ".join(mismatches))
 
     # --- Fermi level: pick the most trustworthy source ---------------------
     candidates: list[tuple[float, str]] = []

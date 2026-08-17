@@ -1,14 +1,15 @@
+# Band Calculation
 
 System = Graphene
-ISTART=1 ; ICHARG=11  			# read from CHGCAR not a new calcualtion
-PREC = Accurate
+ISTART=1 ; ICHARG=11            	#read from CHGCAR, not a new  calculation
 
-#electronic optimiazation 
+PREC = Accurate 
 ENMAX = 450    				#relative to value in POTCAR file
 EDIFF = 1E-6   				#end of self consistent loop condition
-ISMEAR = -5    				#tetrahedron methon suggested for dos
+ISMEAR = 0 ; SIGMA = .05 
 
-LORBIT = 11           			#out put DOSCAR and PROCAR (total and partial dos)
-NEDOS = 1000      			#number of points in dos
 IBRION = -1  		 		#no ionic movement
 NSW = 0  				#no  ionic steps should be taken in this step
+
+LORBIT = 11                             #out put DOSCAR and PROCAR (total and partial dos)
+NEDOS = 1000                            #number of points in dos

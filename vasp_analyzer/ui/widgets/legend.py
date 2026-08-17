@@ -40,18 +40,45 @@ class LineSample(QWidget):
         painter.end()
 
 
+class DotSample(QWidget):
+    """A small filled circle — used for element-colour legend entries, where
+    a dot reads as "this colour" more directly than a line does."""
+
+    def __init__(self, color: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._color = color
+        self.setFixedSize(10, 10)
+
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt naming
+        return QSize(10, 10)
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(QPen(QColor(0, 0, 0, 38), 1))
+        painter.setBrush(QColor(self._color))
+        painter.drawEllipse(1, 1, self.width() - 2, self.height() - 2)
+        painter.end()
+
+
 class PlotLegend(QWidget):
-    """A row of line samples with captions."""
+    """A row of line or dot samples with captions."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._layout = QHBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
         self._layout.setSpacing(SPACING.lg)
-        self._entries: dict[str, tuple[LineSample, QLabel]] = {}
+        self._entries: dict[str, QWidget] = {}
 
     def add_entry(self, key: str, text: str, color: str, dashed: bool = False) -> None:
-        sample = LineSample(color, dashed)
+        self._add(key, text, LineSample(color, dashed))
+
+    def add_dot_entry(self, key: str, text: str, color: str) -> None:
+        self._add(key, text, DotSample(color))
+
+    def _add(self, key: str, text: str, sample: QWidget) -> None:
+        self.remove_entry(key)
         label = QLabel(text)
         label.setStyleSheet(f"font-size: {TYPE.small}px; color: {PALETTE.text};")
 
@@ -63,12 +90,21 @@ class PlotLegend(QWidget):
         row.addWidget(label, 0, Qt.AlignVCenter)
 
         self._layout.addWidget(holder)
-        self._entries[key] = (sample, label)
+        self._entries[key] = holder
         holder.setProperty("legend_key", key)
 
     def set_entry_visible(self, key: str, visible: bool) -> None:
-        for index in range(self._layout.count()):
-            item = self._layout.itemAt(index)
-            widget = item.widget() if item else None
-            if widget is not None and widget.property("legend_key") == key:
-                widget.setVisible(visible)
+        holder = self._entries.get(key)
+        if holder is not None:
+            holder.setVisible(visible)
+
+    def remove_entry(self, key: str) -> None:
+        holder = self._entries.pop(key, None)
+        if holder is not None:
+            self._layout.removeWidget(holder)
+            holder.setParent(None)
+            holder.deleteLater()
+
+    def remove_entries_with_prefix(self, prefix: str) -> None:
+        for key in [k for k in self._entries if k.startswith(prefix)]:
+            self.remove_entry(key)

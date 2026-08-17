@@ -63,3 +63,31 @@ class Settings:
 
     def sync(self) -> None:
         self._settings.sync()
+
+    # -- element colours -----------------------------------------------------
+    # A user override survives across calculations and sessions: once someone
+    # picks a colour for carbon, every future structure with carbon in it uses
+    # it, the same way an editor remembers a theme rather than a per-file
+    # preference.
+
+    def element_color(self, symbol: str) -> str | None:
+        value = self._settings.value(f"structure/element_color/{symbol}")
+        return str(value) if value else None
+
+    def element_colors(self) -> dict[str, str]:
+        """Every element with a stored override, keyed by symbol."""
+        self._settings.beginGroup("structure/element_color")
+        try:
+            keys = self._settings.childKeys()
+            return {key: str(self._settings.value(key)) for key in keys}
+        finally:
+            self._settings.endGroup()
+
+    def set_element_color(self, symbol: str, hex_color: str) -> None:
+        self._settings.setValue(f"structure/element_color/{symbol}", hex_color)
+
+    def clear_element_color(self, symbol: str) -> None:
+        self._settings.remove(f"structure/element_color/{symbol}")
+
+    def clear_all_element_colors(self) -> None:
+        self._settings.remove("structure/element_color")

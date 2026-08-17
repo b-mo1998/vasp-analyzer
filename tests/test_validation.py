@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import pytest
 
+from vasp_analyzer.models.capabilities import Capability
 from vasp_analyzer.models.files import FileStatus
 from vasp_analyzer.services.discovery import discover
 
@@ -81,3 +82,23 @@ def test_doscar_for_a_different_structure_is_rejected(tmp_path):
 
     assert calc.index.entries["doscar"].status is FileStatus.INCONSISTENT
     assert calc.metadata.e_fermi is None
+
+
+def test_matching_procar_is_trusted(tmp_path):
+    fixtures.write_eigenval(tmp_path, n_kpoints=6, n_bands=4, n_electrons=8, n_ions=2)
+    fixtures.write_poscar(tmp_path, atoms=2)
+    fixtures.write_procar(tmp_path, n_kpoints=6, n_bands=4, n_ions=2)
+    calc = discover(tmp_path)
+
+    assert calc.index.entries["procar"].status is FileStatus.FOUND
+    assert calc.can(Capability.ELEMENT_PROJECTION)
+
+
+def test_procar_from_a_different_run_is_rejected(tmp_path):
+    fixtures.write_eigenval(tmp_path, n_kpoints=6, n_bands=4, n_electrons=8, n_ions=2)
+    fixtures.write_poscar(tmp_path, atoms=2)
+    fixtures.write_procar(tmp_path, n_kpoints=20, n_bands=40, n_ions=10)
+    calc = discover(tmp_path)
+
+    assert calc.index.entries["procar"].status is FileStatus.INCONSISTENT
+    assert any(issue.code == "procar_inconsistent" for issue in calc.issues)

@@ -67,11 +67,34 @@ def test_case_d_structure_and_inputs_only(calc_dir):
 
 
 def test_case_e_partial_wannier(calc_dir):
+    """EIGENVAL + wannier90.eig + wannier90.win: bands work, but the pair
+    alone must NOT enable "Wannier Bands" on the Bands page.
+
+    wannier90.eig holds the raw DFT eigenvalues on Wannier90's own
+    construction mesh (mp_grid) — a different k-point set from the
+    EIGENVAL/KPOINTS band path — and no interpolation has actually run
+    without a completed Wannierisation (.chk) or its output
+    (wannier90_band.dat). A real graphene calculation with exactly this file
+    set (wannier90.win + .eig + a .wout that only ran the -pp preprocessing
+    step, no .chk/.amn/.mmn) is what exposed this: treating .eig+.win as
+    sufficient would silently plot nothing meaningful.
+    """
     fixtures.case_e_partial_wannier(calc_dir)
     calc = discover(calc_dir)
 
     assert calc.can(Capability.BANDS)
-    # .eig + .win is enough to offer Wannier bands.
+    assert not calc.can(Capability.WANNIER_BANDS)
+    assert "wannier90_band.dat" in calc.why_not(Capability.WANNIER_BANDS)
+
+
+def test_wannier_band_dat_enables_wannier_bands(calc_dir):
+    """The one file that actually makes an interpolated overlay possible."""
+    fixtures.write_eigenval(calc_dir)
+    fixtures.write_wannier_win(calc_dir)
+    fixtures.write_wannier_eig(calc_dir)
+    fixtures.write_wannier_band_dat(calc_dir)
+    calc = discover(calc_dir)
+
     assert calc.can(Capability.WANNIER_BANDS)
 
 
@@ -128,3 +151,33 @@ def test_mesh_kpoints_disables_path_labels(calc_dir):
 
     assert not calc.can(Capability.KPATH_LABELS)
     assert "mesh" in calc.why_not(Capability.KPATH_LABELS)
+
+
+def test_procar_enables_element_projection(calc_dir):
+    fixtures.write_eigenval(calc_dir, n_kpoints=6, n_bands=4, n_electrons=8, n_ions=2)
+    fixtures.write_poscar(calc_dir, atoms=2)
+    fixtures.write_procar(calc_dir, n_kpoints=6, n_bands=4, n_ions=2)
+    calc = discover(calc_dir)
+
+    assert calc.can(Capability.ELEMENT_PROJECTION)
+
+
+def test_element_projection_needs_bands_too(calc_dir):
+    """A PROCAR with no EIGENVAL has nothing to project onto."""
+    fixtures.write_procar(calc_dir, n_kpoints=6, n_bands=4, n_ions=2)
+    fixtures.write_poscar(calc_dir, atoms=2)
+    calc = discover(calc_dir)
+
+    assert not calc.can(Capability.BANDS)
+    assert not calc.can(Capability.ELEMENT_PROJECTION)
+
+
+def test_procar_from_a_different_run_disables_element_projection(calc_dir):
+    fixtures.write_eigenval(calc_dir, n_kpoints=6, n_bands=4, n_electrons=8, n_ions=2)
+    fixtures.write_poscar(calc_dir, atoms=2)
+    # A leftover PROCAR from an unrelated, larger calculation.
+    fixtures.write_procar(calc_dir, n_kpoints=20, n_bands=40, n_ions=10)
+    calc = discover(calc_dir)
+
+    assert not calc.can(Capability.ELEMENT_PROJECTION)
+    assert "different calculation" in calc.why_not(Capability.ELEMENT_PROJECTION)

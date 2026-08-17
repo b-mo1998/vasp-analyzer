@@ -221,6 +221,61 @@ end kpoint_path
     return path
 
 
+def write_procar(
+    directory: Path,
+    n_kpoints: int = 12,
+    n_bands: int = 6,
+    n_ions: int = 2,
+    n_spin: int = 1,
+    orbitals: tuple[str, ...] = ("s", "py", "pz", "px", "dxy", "dyz", "dz2", "dxz", "x2-y2"),
+    truncate_after_band: int | None = None,
+) -> Path:
+    """A collinear PROCAR with a deterministic, checkable weight pattern:
+    ion 1's weight on orbital 0 equals the band index; every other entry is 0.
+    That makes the parsed array trivial to assert against exactly."""
+    header = (
+        f"# of k-points:  {n_kpoints:4d}         # of bands:  {n_bands:4d}"
+        f"         # of ions:  {n_ions:4d}"
+    )
+    lines = ["PROCAR lm decomposed", header, ""]
+    header_row = "ion" + "".join(f"{o:>7s}" for o in orbitals) + "    tot"
+
+    total_bands_written = 0
+    for spin in range(n_spin):
+        for k in range(n_kpoints):
+            lines.append(
+                f" k-point {k + 1:4d} :    0.00000000 0.00000000 0.00000000"
+                f"     weight = {1.0 / n_kpoints:.8f}"
+            )
+            lines.append("")
+            for band in range(n_bands):
+                if truncate_after_band is not None and total_bands_written >= truncate_after_band:
+                    path = directory / "PROCAR"
+                    path.write_text("\n".join(lines) + "\n")
+                    return path
+                lines.append(
+                    f"band {band + 1:4d} # energy {band - 3.0:12.6f} # occ.  1.00000000"
+                )
+                lines.append("")
+                lines.append(header_row)
+                weight = float(band + 1)
+                for ion in range(n_ions):
+                    values = [weight if (ion == 0 and col == 0) else 0.0 for col in range(len(orbitals))]
+                    row = f"{ion + 1:4d}" + "".join(f"{v:7.3f}" for v in values)
+                    row += f"{sum(values):7.3f}"
+                    lines.append(row)
+                tot_values = [weight if col == 0 else 0.0 for col in range(len(orbitals))]
+                tot_row = "tot " + "".join(f"{v:7.3f}" for v in tot_values)
+                tot_row += f"{sum(tot_values):7.3f}"
+                lines.append(tot_row)
+                lines.append("")
+                total_bands_written += 1
+
+    path = directory / "PROCAR"
+    path.write_text("\n".join(lines) + "\n")
+    return path
+
+
 def write_wannier_eig(directory: Path, n_bands: int = 6, n_kpoints: int = 12) -> Path:
     lines = []
     for k in range(1, n_kpoints + 1):
@@ -228,6 +283,22 @@ def write_wannier_eig(directory: Path, n_bands: int = 6, n_kpoints: int = 12) ->
             lines.append(f"{band:5d}{k:5d}  {-6.0 + 2.0 * band:16.8f}")
     path = directory / "wannier90.eig"
     path.write_text("\n".join(lines) + "\n")
+    return path
+
+
+def write_wannier_band_dat(directory: Path, n_bands: int = 4, n_points: int = 10) -> Path:
+    """postw90's actual interpolated-band output: one blank-separated block
+    per band, ``x  energy`` pairs. Only this file (or a real completed
+    Wannierisation's equivalent) makes "Wannier Bands" genuinely plottable."""
+    blocks = []
+    for band in range(n_bands):
+        rows = [
+            f"{x:12.6f}{-4.0 + band * 1.5 + 0.3 * math.cos(x):14.6f}"
+            for x in (i * 0.1 for i in range(n_points))
+        ]
+        blocks.append("\n".join(rows))
+    path = directory / "wannier90_band.dat"
+    path.write_text("\n\n".join(blocks) + "\n")
     return path
 
 

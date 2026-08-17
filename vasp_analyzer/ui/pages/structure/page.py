@@ -6,9 +6,11 @@ from PySide6.QtCore import QEvent, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QGuiApplication, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QColorDialog,
     QFileDialog,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QPushButton,
     QStackedWidget,
     QVBoxLayout,
@@ -20,7 +22,7 @@ from ....core.logging_setup import get_logger
 from ....models.calculation import Calculation
 from ....models.capabilities import Capability
 from ....models.structure import StructureData
-from ....resources.elements import color as element_color
+from ....services import appearance
 from ....services.loader import DATASET_STRUCTURE, DataLoader
 from ....services.symmetry import analyse
 from ...style import icon_url
@@ -35,6 +37,57 @@ from .sidebar import StructureSidebar
 from .viewer import StructureView, ViewOptions
 
 log = get_logger("ui.structure")
+
+
+class _ElementSwatch(QLabel):
+    """A clickable colour dot in the element legend.
+
+    Click opens a colour picker; right-click offers to reset to the default
+    Jmol-style colour. The choice is applied immediately and persists across
+    sessions and calculations via :mod:`vasp_analyzer.services.appearance` —
+    it's a display preference for "carbon", not a fact about one structure.
+    """
+
+    changed = Signal()
+
+    def __init__(self, element: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._element = element
+        self.setFixedSize(12, 12)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setToolTip(f"{element}: click to change colour, right-click to reset")
+        self._apply_style()
+
+    def _apply_style(self) -> None:
+        colour = appearance.effective_color(self._element)
+        self.setStyleSheet(
+            f"background: {colour}; border-radius: 6px;"
+            f" border: 1px solid rgba(0,0,0,0.15);"
+        )
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        if event.button() == Qt.LeftButton:
+            self._pick_color()
+        elif event.button() == Qt.RightButton:
+            self._show_menu(event.globalPosition().toPoint())
+        super().mousePressEvent(event)
+
+    def _pick_color(self) -> None:
+        current = QColor(appearance.effective_color(self._element))
+        chosen = QColorDialog.getColor(current, self, f"Colour for {self._element}")
+        if chosen.isValid():
+            appearance.set_override(self._element, chosen.name())
+            self._apply_style()
+            self.changed.emit()
+
+    def _show_menu(self, global_pos) -> None:
+        menu = QMenu(self)
+        reset = menu.addAction("Reset to Default Colour")
+        reset.setEnabled(appearance.has_override(self._element))
+        if menu.exec(global_pos) is reset:
+            appearance.clear_override(self._element)
+            self._apply_style()
+            self.changed.emit()
 
 # Glyph characters render inconsistently across fonts, so the tools use
 # bundled icons instead.
@@ -327,12 +380,8 @@ class StructurePage(Page):
             row.setContentsMargins(0, 0, 0, 0)
             row.setSpacing(SPACING.sm)
 
-            swatch = QLabel()
-            swatch.setFixedSize(10, 10)
-            swatch.setStyleSheet(
-                f"background: {element_color(element)}; border-radius: 5px;"
-                f" border: 1px solid rgba(0,0,0,0.15);"
-            )
+            swatch = _ElementSwatch(element)
+            swatch.changed.connect(self._on_color_changed)
             row.addWidget(swatch)
 
             label = QLabel(element)
@@ -365,6 +414,9 @@ class StructurePage(Page):
 
     def _on_atom_selected(self, index: int | None) -> None:
         self._info.show_atom(self._structure, index)
+
+    def _on_color_changed(self) -> None:
+        self._view.update()
 
     # -- toolbar actions -----------------------------------------------------------
 

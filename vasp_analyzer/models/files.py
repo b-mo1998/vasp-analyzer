@@ -80,6 +80,7 @@ VASP_ROLES: list[FileRole] = [
     FileRole("doscar", "DOSCAR", FileGroup.VASP, "Density of states"),
     FileRole("vasprun", "vasprun.xml", FileGroup.VASP, "Complete run record"),
     FileRole("procar", "PROCAR", FileGroup.VASP, "Projected band character"),
+    FileRole("chgcar", "CHGCAR", FileGroup.VASP, "Charge density"),
     FileRole("potcar", "POTCAR", FileGroup.VASP, "Pseudopotentials", hidden=True),
 ]
 

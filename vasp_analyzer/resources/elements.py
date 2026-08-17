@@ -61,22 +61,22 @@ NON_METALS = {
 
 
 def is_metal(symbol: str) -> bool:
-    return _clean(symbol) not in NON_METALS
+    return normalize(symbol) not in NON_METALS
 
 
 def covalent_radius(symbol: str) -> float:
-    return ELEMENTS.get(_clean(symbol), (DEFAULT_RADIUS, DEFAULT_COLOR))[0]
+    return ELEMENTS.get(normalize(symbol), (DEFAULT_RADIUS, DEFAULT_COLOR))[0]
 
 
 def color(symbol: str) -> str:
-    return ELEMENTS.get(_clean(symbol), (DEFAULT_RADIUS, DEFAULT_COLOR))[1]
+    return ELEMENTS.get(normalize(symbol), (DEFAULT_RADIUS, DEFAULT_COLOR))[1]
 
 
 def is_known(symbol: str) -> bool:
-    return _clean(symbol) in ELEMENTS
+    return normalize(symbol) in ELEMENTS
 
 
-def _clean(symbol: str) -> str:
+def normalize(symbol: str) -> str:
     """Normalise labels such as ``Si1``, ``O_s`` or ``FE`` to ``Si``/``O``/``Fe``.
 
     Only the leading run of letters is considered: ``O_s`` is an oxygen with a

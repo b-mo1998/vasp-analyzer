@@ -22,7 +22,14 @@ from ....models.bands import BandData
 from ....models.calculation import Calculation
 from ....models.capabilities import Capability
 from ....models.dos import DosData
-from ....services.loader import DATASET_BANDS, DATASET_DOS, DataLoader
+from ....parsers.procar import ProcarData
+from ....services.loader import (
+    DATASET_BANDS,
+    DATASET_DOS,
+    DATASET_PROCAR,
+    DATASET_STRUCTURE,
+    DataLoader,
+)
 from ...theme import METRICS, PALETTE, SPACING, TYPE
 from ...widgets.empty_state import EmptyState
 from ...widgets.legend import PlotLegend
@@ -34,6 +41,7 @@ from ..base import Page
 from .band_plot import BandPlot
 from .dos_plot import DosPlot, nice_upper_bound
 from .export import ExportRequest, build_figure, save_band_csv, save_dos_csv, save_figure
+from .projection import build_element_overlay, legend_elements
 from .sidebar import BandsSidebar
 
 log = get_logger("ui.bands")
@@ -57,6 +65,9 @@ class BandsPage(Page):
         self._sidebar = BandsSidebar()
         self._bands: BandData | None = None
         self._dos: DosData | None = None
+        self._procar: ProcarData | None = None
+        self._species: list[str] | None = None
+        self._element_projection_requested = False
         self._dos_visible = True
         self._auto_xmax = True
 
@@ -172,10 +183,16 @@ class BandsPage(Page):
         super().set_calculation(calculation)
         self._bands = None
         self._dos = None
+        self._procar = None
+        self._species = None
+        self._element_projection_requested = False
         self._auto_xmax = True
         self._notice.clear()
         self._band_plot.set_bands(None)
+        self._band_plot.set_projection(None)
         self._dos_plot.set_dos(None)
+        self._legend.remove_entries_with_prefix("element:")
+        self._sidebar.projections["element"].setChecked(False)
 
         if calculation is None:
             self._sidebar.set_controls_enabled(False)
@@ -259,6 +276,10 @@ class BandsPage(Page):
             self._apply_bands(result)
         elif dataset == DATASET_DOS:
             self._apply_dos(result)
+        elif dataset == DATASET_PROCAR:
+            self._apply_procar(result)
+        elif dataset == DATASET_STRUCTURE:
+            self._apply_species(result)
 
     def _apply_bands(self, result: ParseResult) -> None:
         for issue in result.issues:
@@ -275,6 +296,7 @@ class BandsPage(Page):
         self._stack.setCurrentIndex(0)
         self._band_plot.set_bands(self._bands)
         self._on_limits_changed()
+        self._try_build_projection()
 
     def _apply_dos(self, result: ParseResult) -> None:
         if not result.ok:
@@ -341,8 +363,13 @@ class BandsPage(Page):
             widget.blockSignals(False)
 
     def _on_projection_toggled(self, key: str, checked: bool) -> None:
-        # Projections are not implemented yet; the controls exist and respect
-        # capability state, but nothing is drawn until the data path lands.
+        if key == "element":
+            self._set_element_projection(checked)
+            return
+
+        # Spin and Wannier projections aren't implemented yet; the checkboxes
+        # exist and correctly respect capability state, but nothing is drawn
+        # until each data path lands.
         log.info("Projection %s toggled -> %s (not yet implemented)", key, checked)
         if checked:
             self._notice.show_issue(
@@ -354,6 +381,67 @@ class BandsPage(Page):
             )
         else:
             self._notice.clear()
+
+    def _set_element_projection(self, checked: bool) -> None:
+        if not checked:
+            self._element_projection_requested = False
+            self._band_plot.set_projection(None)
+            self._legend.remove_entries_with_prefix("element:")
+            return
+
+        calculation = self.calculation()
+        if calculation is None or not calculation.can(Capability.ELEMENT_PROJECTION):
+            return
+
+        self._element_projection_requested = True
+        self._loader.request(DATASET_PROCAR)
+        self._loader.request(DATASET_STRUCTURE)
+        self._try_build_projection()
+
+    def _apply_procar(self, result: ParseResult) -> None:
+        if not result.ok:
+            for issue in result.issues:
+                self._notice.show_issue(issue)
+                break
+            self._sidebar.projections["element"].setChecked(False)
+            return
+        self._procar = result.value
+        for issue in result.issues:
+            if issue.severity in (Severity.WARNING, Severity.ERROR):
+                self._notice.show_issue(issue)
+                break
+        self._try_build_projection()
+
+    def _apply_species(self, result: ParseResult) -> None:
+        if result.ok and result.value is not None:
+            self._species = list(result.value.species)
+            self._try_build_projection()
+
+    def _try_build_projection(self) -> None:
+        if not self._element_projection_requested:
+            return
+        if self._bands is None or self._procar is None or self._species is None:
+            return
+
+        overlay = build_element_overlay(self._bands, self._procar, self._species)
+        if overlay is None:
+            self._notice.show_issue(
+                Issue(
+                    code="procar_mismatched_dimensions",
+                    message=(
+                        "PROCAR's k-points or bands don't match EIGENVAL, so "
+                        "element projection can't be shown."
+                    ),
+                    severity=Severity.WARNING,
+                )
+            )
+            self._sidebar.projections["element"].setChecked(False)
+            return
+
+        self._band_plot.set_projection(overlay)
+        self._legend.remove_entries_with_prefix("element:")
+        for element, color in legend_elements(self._species):
+            self._legend.add_dot_entry(f"element:{element}", element, color)
 
     def _show_unavailable(self, title: str, message: str) -> None:
         self._empty.set_text(title, message)

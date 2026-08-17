@@ -310,22 +310,34 @@ def _determine_capabilities(
         caps.has(Capability.BANDS) and (spin_polarised or noncollinear),
         "This calculation has a single spin channel.",
     )
+    procar_entry = index.entries.get("procar")
+    procar_present = bool(procar_entry and procar_entry.exists)
+    procar_ok = index.has("procar") and consistency.procar_trusted
     caps.set(
         Capability.ELEMENT_PROJECTION,
-        index.has("procar") or index.has("vasprun"),
-        "Element projection needs PROCAR or vasprun.xml.",
+        caps.has(Capability.BANDS) and (procar_ok or index.has("vasprun")),
+        (
+            "PROCAR describes a different calculation and was ignored."
+            if procar_present and not consistency.procar_trusted
+            else "Element projection needs PROCAR or vasprun.xml."
+        ),
     )
 
     # Wannier -------------------------------------------------------------
-    has_w90_bands = index.has("w90_band_dat") or (
-        index.has("w90_eig") and index.has("w90_win")
-    )
-    if has_w90_bands:
+    # wannier90.eig + wannier90.win alone are NOT enough: .eig is the raw DFT
+    # eigenvalues on Wannier90's own construction mesh (mp_grid), a different
+    # k-point set from the EIGENVAL/KPOINTS band path, and no interpolation
+    # has actually happened without a completed run (.chk) or its output
+    # (wannier90_band.dat). Treating that pair as sufficient would either plot
+    # nothing meaningful or silently mismatch two different k-point sets.
+    if index.has("w90_band_dat"):
         caps.enable(Capability.WANNIER_BANDS)
     elif index.has("w90_win"):
         caps.disable(
             Capability.WANNIER_BANDS,
-            "No interpolated Wannier bands were found for this seedname.",
+            "No interpolated Wannier bands (wannier90_band.dat) were found. "
+            "wannier90.win/.eig alone describe the Wannierisation setup, not "
+            "a completed interpolation.",
         )
     else:
         caps.disable(

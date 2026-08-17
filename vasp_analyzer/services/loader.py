@@ -23,6 +23,7 @@ from ..models.structure import StructureData
 from ..parsers.doscar import parse_doscar
 from ..parsers.eigenval import parse_eigenval
 from ..parsers.poscar import parse_poscar
+from ..parsers.procar import parse_procar
 from .kpath import build_kpath
 
 log = get_logger("services.loader")
@@ -30,6 +31,7 @@ log = get_logger("services.loader")
 DATASET_BANDS = "bands"
 DATASET_DOS = "dos"
 DATASET_STRUCTURE = "structure"
+DATASET_PROCAR = "procar"
 
 
 @dataclass(frozen=True)
@@ -147,6 +149,8 @@ class DataLoader(QObject):
             key_name = "doscar"
         elif dataset == DATASET_STRUCTURE:
             key_name = "poscar" if index.has("poscar") else "contcar"
+        elif dataset == DATASET_PROCAR:
+            key_name = "procar"
         else:
             return None
 
@@ -165,6 +169,8 @@ class DataLoader(QObject):
             return parse_doscar(path)
         if dataset == DATASET_STRUCTURE:
             return parse_poscar(path, source=path.name)
+        if dataset == DATASET_PROCAR:
+            return parse_procar(path)
         return ParseResult.failure("unknown_dataset", f"Unknown dataset {dataset!r}.")
 
     def _attach_kpath(self, bands: BandData, calculation: Calculation) -> None:
@@ -227,6 +233,7 @@ __all__ = [
     "DATASET_BANDS",
     "DATASET_DOS",
     "DATASET_STRUCTURE",
+    "DATASET_PROCAR",
 ]
 
 

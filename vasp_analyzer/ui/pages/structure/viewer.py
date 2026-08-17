@@ -24,8 +24,8 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QWidget
 
 from ....models.structure import StructureData
-from ....resources.elements import color as element_color
 from ....resources.elements import covalent_radius
+from ....services.appearance import effective_color
 from ....services.bonds import BondSet, build_sites_and_bonds, unit_cell_edges
 from ...theme import PALETTE
 from .camera import Camera
@@ -244,7 +244,7 @@ class StructureView(QWidget):
     def _site_color(self, index: int) -> QColor:
         assert self._bonds is not None
         site = self._bonds.sites[index]
-        colour = QColor(element_color(site.symbol))
+        colour = QColor(effective_color(site.symbol))
         if site.is_ghost:
             colour.setAlpha(GHOST_ALPHA)
         return colour
@@ -256,7 +256,7 @@ class StructureView(QWidget):
         site = self._bonds.sites[index]
         radius = max(1.5, float(radii[index]))
         centre = QPointF(float(screen[index][0]), float(screen[index][1]))
-        base = QColor(element_color(site.symbol))
+        base = QColor(effective_color(site.symbol))
 
         # A soft radial gradient reads as a sphere without needing lighting.
         gradient = QRadialGradient(
