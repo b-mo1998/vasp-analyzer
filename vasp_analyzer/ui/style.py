@@ -184,26 +184,11 @@ def build_stylesheet() -> str:
     }}
     #PrimaryButton:hover {{ background: {p.accent_hover}; }}
 
-    /* ---- Sliders ----------------------------------------------------- */
-    QSlider::groove:horizontal {{
-        height: 4px;
-        background: {p.border};
-        border-radius: 2px;
-    }}
-    QSlider::sub-page:horizontal {{
-        background: {p.accent};
-        border-radius: 2px;
-    }}
-    QSlider::handle:horizontal {{
-        background: {p.surface};
-        border: 1px solid {p.border_strong};
-        width: 15px;
-        height: 15px;
-        margin: -6px 0;
-        border-radius: 8px;
-    }}
-    QSlider::handle:horizontal:hover {{ border-color: {p.accent}; }}
-    QSlider:disabled::sub-page:horizontal {{ background: {p.border_strong}; }}
+    /* Sliders are not QSlider — see ui/widgets/painted_slider.py. QSlider's
+       ::groove/::add-page stylesheet subcontrols turn out to silently revert
+       to native Fusion painting once nested inside a QScrollArea, which every
+       sidebar in this app is; a custom-painted widget sidesteps that
+       entirely and is what's actually in use everywhere. */
 
     /* ---- Value fields ------------------------------------------------ */
     /* Flat by default (a tinted pill, no outline) so a sidebar full of them

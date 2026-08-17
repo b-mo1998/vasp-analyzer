@@ -6,25 +6,19 @@ Layout::
     ──────●────────────────────────
     -20                              0
 
-Qt sliders are integer-only, so the control keeps a float model internally and
-maps it onto integer steps. The numeric field accepts typed input for exact
-values, which the sliders alone cannot give.
+The numeric field accepts typed input for exact values; the slider itself is
+:class:`PaintedSlider`, a custom-painted control rather than a styled QSlider
+(see that module for why).
 """
 
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QDoubleValidator
-from PySide6.QtWidgets import (
-    QHBoxLayout,
-    QLabel,
-    QLineEdit,
-    QSlider,
-    QVBoxLayout,
-    QWidget,
-)
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QLineEdit, QVBoxLayout, QWidget
 
 from ..theme import SPACING
+from .painted_slider import PaintedSlider
 
 
 class SliderRow(QWidget):
@@ -47,7 +41,6 @@ class SliderRow(QWidget):
         super().__init__(parent)
         self._min = float(minimum)
         self._max = float(maximum)
-        self._step = float(step)
         self._unit = unit
         self._decimals = decimals
         self._value = float(value)
@@ -65,11 +58,7 @@ class SliderRow(QWidget):
         self._field.setValidator(QDoubleValidator(self._min, self._max, decimals, self))
         self._field.editingFinished.connect(self._on_field_committed)
 
-        self._slider = QSlider(Qt.Horizontal)
-        self._slider.setMinimum(0)
-        self._slider.setMaximum(self._steps())
-        self._slider.setSingleStep(1)
-        self._slider.setPageStep(max(1, self._steps() // 20))
+        self._slider = PaintedSlider(self._min, self._max, self._value, single_step=step)
         self._slider.valueChanged.connect(self._on_slider_moved)
 
         if inline:
@@ -125,9 +114,7 @@ class SliderRow(QWidget):
         validator = self._field.validator()
         if isinstance(validator, QDoubleValidator):
             validator.setRange(self._min, self._max, self._decimals)
-        self._slider.blockSignals(True)
-        self._slider.setMaximum(self._steps())
-        self._slider.blockSignals(False)
+        self._slider.setRange(self._min, self._max)
         self._min_label.setText(self._format_plain(self._min))
         self._max_label.setText(self._format_plain(self._max))
         self.setValue(self._value, notify=False)
@@ -138,16 +125,6 @@ class SliderRow(QWidget):
         self._field.setEnabled(enabled)
 
     # -- internals ---------------------------------------------------------
-
-    def _steps(self) -> int:
-        span = self._max - self._min
-        return max(1, int(round(span / self._step)))
-
-    def _to_step(self, value: float) -> int:
-        return int(round((value - self._min) / self._step))
-
-    def _from_step(self, step: int) -> float:
-        return self._min + step * self._step
 
     def _format_value(self, value: float) -> str:
         text = f"{value:.{self._decimals}f}"
@@ -160,14 +137,14 @@ class SliderRow(QWidget):
 
     def _sync_widgets(self) -> None:
         self._emitting = True
-        self._slider.setValue(self._to_step(self._value))
+        self._slider.setValue(self._value, notify=False)
         self._field.setText(self._format_value(self._value))
         self._emitting = False
 
-    def _on_slider_moved(self, step: int) -> None:
+    def _on_slider_moved(self, value: float) -> None:
         if self._emitting:
             return
-        self.setValue(self._from_step(step))
+        self.setValue(value)
 
     def _on_field_committed(self) -> None:
         text = self._field.text().replace(self._unit, "").strip()
