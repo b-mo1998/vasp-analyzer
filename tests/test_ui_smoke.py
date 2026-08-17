@@ -244,7 +244,7 @@ def test_structure_page_renders_a_structure(window, qtbot, tmp_path):
     fixtures.case_a_complete(directory)
 
     window.open_directory(directory)
-    window._nav.setCurrentIndex(1)
+    window._nav.setCurrentIndex(0)
     qtbot.wait(150)
 
     page = window._structure
@@ -263,7 +263,7 @@ def test_structure_atom_color_override_updates_the_legend_and_view(window, qtbot
     fixtures.case_a_complete(directory)
 
     window.open_directory(directory)
-    window._nav.setCurrentIndex(1)
+    window._nav.setCurrentIndex(0)
     qtbot.wait(150)
 
     page = window._structure
@@ -290,7 +290,7 @@ def test_structure_page_empty_without_a_structure_file(window, qtbot, tmp_path):
     fixtures.write_incar(directory)
 
     window.open_directory(directory)
-    window._nav.setCurrentIndex(1)
+    window._nav.setCurrentIndex(0)
     qtbot.wait(150)
 
     assert window._structure._stack.currentIndex() == 1

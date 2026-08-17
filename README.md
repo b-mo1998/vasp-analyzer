@@ -93,8 +93,8 @@ A quantity that cannot be determined shows `—`. Nothing is guessed.
 
 | Page | Status |
 |---|---|
-| Bands | Band structure, optional DOS panel on a shared energy axis, export |
-| Structure | Interactive 3D viewer, symmetry, lattice information |
+| Structure | Interactive 3D viewer, symmetry, lattice information, custom atom colours |
+| Bands | Band structure, DOS panel on a shared energy axis, element projection, export |
 | Inputs | File browser, syntax-highlighted viewer, search, guarded editing |
 | Wannier / Topology / Calculation | Future modules |
 
@@ -104,7 +104,7 @@ A quantity that cannot be determined shows `—`. Nothing is guessed.
 .venv/bin/python -m pytest tests/ -q
 ```
 
-72 tests, covering every partial-calculation scenario (complete, bands-only,
+116 tests, covering every partial-calculation scenario (complete, bands-only,
 no EIGENVAL, structure-only, partial Wannier, malformed DOSCAR, empty folder)
 at both the service and the window level.
 
@@ -114,4 +114,4 @@ To capture the window without a display:
 QT_QPA_PLATFORM=offscreen .venv/bin/python tools/screenshot.py <calc-dir> out.png <page>
 ```
 
-`<page>` is 0 for Bands, 1 for Structure, 2 for Inputs.
+`<page>` is 0 for Structure, 1 for Bands, 2 for Inputs.

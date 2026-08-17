@@ -40,7 +40,7 @@ from .widgets.segmented import SegmentedControl
 
 log = get_logger("ui.main_window")
 
-PAGES = ["Bands", "Structure", "Inputs"]
+PAGES = ["Structure", "Bands", "Inputs"]
 
 
 class MainWindow(QMainWindow):
@@ -112,10 +112,10 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(root)
 
         # --- pages ------------------------------------------------------------
-        self._bands = BandsPage(self._loader)
-        self._register_page(self._bands)
         self._structure = StructurePage(self._loader)
         self._register_page(self._structure)
+        self._bands = BandsPage(self._loader)
+        self._register_page(self._bands)
         self._inputs = InputsPage()
         self._register_page(self._inputs)
 
