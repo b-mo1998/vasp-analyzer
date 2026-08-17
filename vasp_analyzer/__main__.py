@@ -10,7 +10,7 @@ from PySide6.QtWidgets import QApplication
 from .core.logging_setup import configure_logging, get_logger
 from .ui.main_window import MainWindow
 from .ui.plotting import apply_plot_style
-from .ui.style import build_stylesheet
+from .ui.style import apply_theme
 
 
 def main() -> int:
@@ -21,9 +21,7 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("VASP Analyzer")
     app.setOrganizationName("VASPAnalyzer")
-    app.setStyle("Fusion")  # a predictable base for the stylesheet
-    app.setStyleSheet(build_stylesheet())
-
+    apply_theme(app)
     apply_plot_style()
 
     window = MainWindow()

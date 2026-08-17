@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QPalette
+
 from .theme import METRICS, PALETTE, RADIUS, SPACING, TYPE
 
 ICON_DIR = Path(__file__).resolve().parent.parent / "resources" / "icons"
@@ -12,6 +15,59 @@ ICON_DIR = Path(__file__).resolve().parent.parent / "resources" / "icons"
 def icon_url(name: str) -> str:
     """Qt stylesheet URL for a bundled icon (forward slashes on every platform)."""
     return (ICON_DIR / name).as_posix()
+
+
+def build_palette() -> QPalette:
+    """An explicit light QPalette, independent of the OS appearance.
+
+    The stylesheet alone is not enough: Fusion resolves any palette role the
+    stylesheet doesn't touch from the system theme, and Qt's own widgets paint
+    some of their internals from palette roles rather than QSS. The clearest
+    case is QScrollArea's viewport, which every sidebar uses and which paints
+    itself with the Base role — in macOS Dark Mode that made every sidebar
+    render black with barely legible text. Setting every role explicitly here
+    means the app looks identical regardless of the user's system appearance,
+    which is deliberate: there is no dark theme yet, so half-dark is worse
+    than consistently light.
+    """
+    p = PALETTE
+    palette = QPalette()
+    palette.setColor(QPalette.ColorRole.Window, QColor(p.background))
+    palette.setColor(QPalette.ColorRole.WindowText, QColor(p.text))
+    palette.setColor(QPalette.ColorRole.Base, QColor(p.surface))
+    palette.setColor(QPalette.ColorRole.AlternateBase, QColor(p.surface_sunken))
+    palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(p.text))
+    palette.setColor(QPalette.ColorRole.ToolTipText, QColor("#ffffff"))
+    palette.setColor(QPalette.ColorRole.Text, QColor(p.text))
+    palette.setColor(QPalette.ColorRole.Button, QColor(p.surface))
+    palette.setColor(QPalette.ColorRole.ButtonText, QColor(p.text))
+    palette.setColor(QPalette.ColorRole.BrightText, QColor(p.danger))
+    palette.setColor(QPalette.ColorRole.Link, QColor(p.accent))
+    palette.setColor(QPalette.ColorRole.Highlight, QColor(p.accent))
+    palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
+    palette.setColor(QPalette.ColorRole.PlaceholderText, QColor(p.text_tertiary))
+    for role in (
+        QPalette.ColorRole.Text,
+        QPalette.ColorRole.WindowText,
+        QPalette.ColorRole.ButtonText,
+    ):
+        palette.setColor(QPalette.ColorGroup.Disabled, role, QColor(p.disabled_text))
+    return palette
+
+
+def apply_theme(app) -> None:
+    """Install the application's look: style, palette and stylesheet, in the
+    order Qt needs them applied so none of the three gets silently overridden
+    by a later system-appearance change."""
+    app.setStyle("Fusion")
+    style_hints = getattr(app, "styleHints", None)
+    if style_hints is not None:
+        try:
+            style_hints().setColorScheme(Qt.ColorScheme.Light)
+        except AttributeError:
+            pass  # Qt < 6.5: the palette override below still applies.
+    app.setPalette(build_palette())
+    app.setStyleSheet(build_stylesheet())
 
 
 def build_stylesheet() -> str:
@@ -150,16 +206,23 @@ def build_stylesheet() -> str:
     QSlider:disabled::sub-page:horizontal {{ background: {p.border_strong}; }}
 
     /* ---- Value fields ------------------------------------------------ */
+    /* Flat by default (a tinted pill, no outline) so a sidebar full of them
+       doesn't read as a wall of boxes; the border only appears on hover and
+       focus, where it signals "this is editable" right when it matters. */
     #ValueField {{
-        background: {p.surface};
-        border: 1px solid {p.border};
+        background: {p.surface_sunken};
+        border: 1px solid transparent;
         border-radius: {r.sm}px;
         padding: 2px {s.sm}px;
         min-height: 22px;
         font-size: {t.small}px;
         color: {p.text};
     }}
+    #ValueField:hover {{
+        border-color: {p.border};
+    }}
     #ValueField:focus {{
+        background: {p.surface};
         border-color: {p.accent};
     }}
     #ValueField:disabled {{

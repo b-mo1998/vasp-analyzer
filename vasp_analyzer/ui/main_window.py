@@ -47,7 +47,12 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("VASP Analyzer")
-        self.setMinimumSize(1180, 720)
+        # Wide enough that the Structure page's toolbar (title, five icon
+        # buttons, the Perspective/Orthographic pill) never gets compressed
+        # below its text width once the two fixed-width side panels are
+        # subtracted — that compression is what clipped the pill's labels to
+        # "rspect" / "hograp" at the previous 1180px floor.
+        self.setMinimumSize(1360, 760)
         self.setAcceptDrops(True)
 
         self._settings = Settings()

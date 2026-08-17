@@ -12,7 +12,7 @@ import pytest
 from vasp_analyzer.models.capabilities import Capability
 from vasp_analyzer.ui.main_window import MainWindow
 from vasp_analyzer.ui.plotting import apply_plot_style
-from vasp_analyzer.ui.style import build_stylesheet
+from vasp_analyzer.ui.style import apply_theme
 
 from . import fixtures
 
@@ -29,7 +29,7 @@ SCENARIOS = [
 
 @pytest.fixture(scope="module", autouse=True)
 def _style(qapp):
-    qapp.setStyleSheet(build_stylesheet())
+    apply_theme(qapp)
     apply_plot_style()
     return qapp
 

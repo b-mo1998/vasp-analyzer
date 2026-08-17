@@ -18,7 +18,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 from vasp_analyzer.core.logging_setup import configure_logging  # noqa: E402
 from vasp_analyzer.ui.main_window import MainWindow  # noqa: E402
 from vasp_analyzer.ui.plotting import apply_plot_style  # noqa: E402
-from vasp_analyzer.ui.style import build_stylesheet  # noqa: E402
+from vasp_analyzer.ui.style import apply_theme  # noqa: E402
 
 
 def main() -> int:
@@ -30,8 +30,7 @@ def main() -> int:
 
     configure_logging(console=False)
     app = QApplication(sys.argv[:1])
-    app.setStyle("Fusion")
-    app.setStyleSheet(build_stylesheet())
+    apply_theme(app)
     apply_plot_style()
 
     window = MainWindow()
