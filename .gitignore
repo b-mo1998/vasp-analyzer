@@ -11,6 +11,7 @@ dist/
 
 # Never commit calculation data or credentials
 Silicon Files/
+Graphene/
 *.chk
 *.spn
 WAVECAR

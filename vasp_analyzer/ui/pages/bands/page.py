@@ -58,6 +58,7 @@ class BandsPage(Page):
 
     title = "Bands"
     issueRaised = Signal(object)
+    gapComputed = Signal(str, str)  # display text, tooltip
 
     def __init__(self, loader: DataLoader, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -67,6 +68,7 @@ class BandsPage(Page):
         self._dos: DosData | None = None
         self._procar: ProcarData | None = None
         self._species: list[str] | None = None
+        self._selected_orbital: str | None = None
         self._element_projection_requested = False
         self._dos_visible = True
         self._auto_xmax = True
@@ -169,6 +171,7 @@ class BandsPage(Page):
         side.fermiChanged.connect(self._on_reference_changed)
         side.dosToggled.connect(self._set_dos_visible)
         side.projectionToggled.connect(self._on_projection_toggled)
+        side.orbitalChanged.connect(self._on_orbital_changed)
 
         self._dos_toggle.toggled.connect(self._set_dos_visible)
         self._xmax.valueChanged.connect(self._on_xmax_changed)
@@ -185,6 +188,7 @@ class BandsPage(Page):
         self._dos = None
         self._procar = None
         self._species = None
+        self._selected_orbital = None
         self._element_projection_requested = False
         self._auto_xmax = True
         self._notice.clear()
@@ -193,6 +197,8 @@ class BandsPage(Page):
         self._dos_plot.set_dos(None)
         self._legend.remove_entries_with_prefix("element:")
         self._sidebar.projections["element"].setChecked(False)
+        self._sidebar.clear_orbitals()
+        self.gapComputed.emit("—", "")
 
         if calculation is None:
             self._sidebar.set_controls_enabled(False)
@@ -297,6 +303,38 @@ class BandsPage(Page):
         self._band_plot.set_bands(self._bands)
         self._on_limits_changed()
         self._try_build_projection()
+        self._update_gap_display()
+
+    def _update_gap_display(self) -> None:
+        calculation = self.calculation()
+        # The gap is a property of the calculation, resolved once against its
+        # own determined Fermi level — not the sidebar's interactive Fermi
+        # slider, which is a display reference the user can drag anywhere and
+        # shouldn't make this readout jump around.
+        if self._bands is None or calculation is None or calculation.metadata.e_fermi is None:
+            self.gapComputed.emit(
+                "—",
+                "A band gap needs both EIGENVAL and a determined Fermi level "
+                "(from DOSCAR, OUTCAR or vasprun.xml).",
+            )
+            return
+
+        e_fermi = calculation.metadata.e_fermi
+        gap = self._bands.band_gap(e_fermi.value)
+        if gap is None:
+            self.gapComputed.emit(
+                "Metallic",
+                f"No band gap at E_F = {e_fermi.value:.4f} eV ({e_fermi.source}): "
+                "the valence and conduction states overlap there.",
+            )
+            return
+
+        kind = "direct" if gap.is_direct else "indirect"
+        self.gapComputed.emit(
+            f"{gap.gap:.2f} eV ({kind})",
+            f"VBM {gap.vbm:.4f} eV, CBM {gap.cbm:.4f} eV, relative to "
+            f"E_F = {e_fermi.value:.4f} eV ({e_fermi.source}).",
+        )
 
     def _apply_dos(self, result: ParseResult) -> None:
         if not result.ok:
@@ -406,6 +444,7 @@ class BandsPage(Page):
             self._sidebar.projections["element"].setChecked(False)
             return
         self._procar = result.value
+        self._sidebar.set_orbitals(self._procar.orbitals)
         for issue in result.issues:
             if issue.severity in (Severity.WARNING, Severity.ERROR):
                 self._notice.show_issue(issue)
@@ -417,13 +456,19 @@ class BandsPage(Page):
             self._species = list(result.value.species)
             self._try_build_projection()
 
+    def _on_orbital_changed(self, orbital: str | None) -> None:
+        self._selected_orbital = orbital
+        self._try_build_projection()
+
     def _try_build_projection(self) -> None:
         if not self._element_projection_requested:
             return
         if self._bands is None or self._procar is None or self._species is None:
             return
 
-        overlay = build_element_overlay(self._bands, self._procar, self._species)
+        overlay = build_element_overlay(
+            self._bands, self._procar, self._species, orbital=self._selected_orbital
+        )
         if overlay is None:
             self._notice.show_issue(
                 Issue(

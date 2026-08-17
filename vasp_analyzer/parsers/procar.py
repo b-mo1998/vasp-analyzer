@@ -87,20 +87,41 @@ class ProcarData:
     def n_ions(self) -> int:
         return int(self.ion_weights.shape[3])
 
-    def element_weight(self, species: list[str], element: str, spin: int = 0) -> np.ndarray:
-        """(n_kpoints, n_bands) total character on one element, summed over its
-        ions and every orbital."""
+    def element_weight(
+        self, species: list[str], element: str, spin: int = 0, orbital: str | None = None
+    ) -> np.ndarray:
+        """(n_kpoints, n_bands) character on one element, summed over its ions.
+
+        Summed over every orbital by default; pass ``orbital`` (one of
+        :attr:`orbitals`, e.g. ``"pz"``) to restrict to just that one —
+        graphene's pz-dominated pi bands are invisible under "by element"
+        alone when there's only one element, but stand out immediately
+        filtered to pz.
+        """
         mask = np.array([s == element for s in species], dtype=bool)
         if mask.size != self.n_ions or not mask.any():
             return np.zeros((self.n_kpoints, self.n_bands))
         spin = min(spin, self.n_spin - 1)
-        return self.ion_weights[spin][:, :, mask, :].sum(axis=(2, 3))
+        weights = self.ion_weights[spin][:, :, mask, :]
+        weights = self._restrict_to_orbital(weights, orbital)
+        return weights.sum(axis=(2, 3))
 
-    def total_weight(self, spin: int = 0) -> np.ndarray:
-        """(n_kpoints, n_bands) character summed over every ion and orbital —
-        used to spot bands the basis barely describes (weight well below 1)."""
+    def total_weight(self, spin: int = 0, orbital: str | None = None) -> np.ndarray:
+        """(n_kpoints, n_bands) character summed over every ion, and every
+        orbital unless ``orbital`` restricts it to one — used to spot bands
+        the basis (or the selected orbital) barely describes."""
         spin = min(spin, self.n_spin - 1)
-        return self.ion_weights[spin].sum(axis=(2, 3))
+        weights = self._restrict_to_orbital(self.ion_weights[spin], orbital)
+        return weights.sum(axis=(2, 3))
+
+    def _restrict_to_orbital(self, weights: np.ndarray, orbital: str | None) -> np.ndarray:
+        if orbital is None:
+            return weights
+        try:
+            index = self.orbitals.index(orbital)
+        except ValueError:
+            return np.zeros_like(weights[..., :1])
+        return weights[..., index : index + 1]
 
 
 def _split_ion_row(line: str) -> list[float] | None:

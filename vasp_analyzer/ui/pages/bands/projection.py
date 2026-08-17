@@ -29,12 +29,18 @@ class ProjectionOverlay:
 
 
 def build_element_overlay(
-    bands: BandData, procar: ProcarData, species: list[str]
+    bands: BandData, procar: ProcarData, species: list[str], orbital: str | None = None
 ) -> ProjectionOverlay | None:
     """Colour every (k-point, band) point by a weighted blend of the elements
     it's built from, and size it by how much of the wavefunction PROCAR
     actually accounts for there — a band the local basis barely describes
     shows as a small, faint dot rather than a confident one.
+
+    ``orbital`` restricts everything (colour blend and size alike) to one
+    orbital's character — e.g. "pz" — rather than the total across all of
+    them. For a single-element system like graphene, "by element" alone is
+    visually flat (everything is carbon); filtered to pz it immediately
+    picks out the pi bands.
 
     Returns ``None`` if PROCAR's dimensions don't match the bands being
     plotted. A stale PROCAR can pass the coarse discovery-time consistency
@@ -55,11 +61,11 @@ def build_element_overlay(
     sizes: list[np.ndarray] = []
 
     for spin in range(n_spin):
-        total = procar.total_weight(spin)  # (nk, nbands)
+        total = procar.total_weight(spin, orbital=orbital)  # (nk, nbands)
         blended = np.zeros((*total.shape, 3))
         safe_total = np.where(total > 1e-9, total, 1.0)
         for element in elements:
-            weight = procar.element_weight(species, element, spin)
+            weight = procar.element_weight(species, element, spin, orbital=orbital)
             blended += (weight / safe_total)[..., None] * element_rgb[element]
 
         # Where PROCAR carries essentially no weight, a blended colour has no

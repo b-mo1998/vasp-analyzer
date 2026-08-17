@@ -225,6 +225,78 @@ def test_element_projection_end_to_end(window, qtbot, tmp_path):
     assert not (page._legend._entries.keys() & {"element:Si"})
 
 
+def test_orbital_selector_populates_and_filters(window, qtbot, tmp_path):
+    directory = tmp_path / "orbital"
+    directory.mkdir()
+    fixtures.write_eigenval(directory, n_kpoints=6, n_bands=4, n_electrons=8, n_ions=2)
+    fixtures.write_poscar(directory, atoms=2)
+    fixtures.write_procar(directory, n_kpoints=6, n_bands=4, n_ions=2)
+
+    window.open_directory(directory)
+    qtbot.wait(150)
+
+    page = window._bands
+    sidebar = page._sidebar
+    assert sidebar.orbital_box.count() == 1  # just "All Orbitals", nothing loaded yet
+    assert not sidebar.orbital_box.isEnabled()
+
+    sidebar.projections["element"].setChecked(True)
+    qtbot.waitUntil(lambda: page._procar is not None, timeout=3000)
+
+    assert sidebar.orbital_box.isEnabled()
+    assert sidebar.orbital_box.findText("pz") >= 0
+
+    sidebar.orbital_box.setCurrentText("pz")
+    qtbot.wait(60)
+    assert page._selected_orbital == "pz"
+    assert page._band_plot._projection is not None
+
+    # Unchecking the projection disables and resets the selector, without
+    # forgetting the calculation's orbital list — re-checking should not
+    # need to reload PROCAR to repopulate it.
+    sidebar.projections["element"].setChecked(False)
+    assert not sidebar.orbital_box.isEnabled()
+    assert sidebar.orbital_box.currentText() == "All Orbitals"
+
+    sidebar.projections["element"].setChecked(True)
+    assert sidebar.orbital_box.isEnabled()
+    assert sidebar.orbital_box.count() > 1
+
+
+def test_band_gap_appears_in_the_info_bar(window, qtbot, tmp_path):
+    directory = tmp_path / "gap"
+    directory.mkdir()
+    fixtures.case_a_complete(directory)  # EIGENVAL + DOSCAR (Fermi level) present
+
+    window.open_directory(directory)
+    qtbot.wait(150)
+
+    qtbot.waitUntil(
+        lambda: window._info_bar._fields["gap"]._value.text() != "—", timeout=3000
+    )
+    text = window._info_bar._fields["gap"]._value.text()
+    assert "eV" in text
+    assert "(direct)" in text or "(indirect)" in text or text == "Metallic"
+
+
+def test_band_gap_resets_on_a_new_calculation_without_bands(window, qtbot, tmp_path):
+    with_gap = tmp_path / "with_gap"
+    with_gap.mkdir()
+    fixtures.case_a_complete(with_gap)
+    window.open_directory(with_gap)
+    qtbot.waitUntil(
+        lambda: window._info_bar._fields["gap"]._value.text() != "—", timeout=3000
+    )
+
+    without_bands = tmp_path / "without_bands"
+    without_bands.mkdir()
+    fixtures.case_d_structure_only(without_bands)
+    window.open_directory(without_bands)
+    qtbot.wait(100)
+
+    assert window._info_bar._fields["gap"]._value.text() == "—"
+
+
 def test_element_projection_unavailable_without_matching_procar(window, qtbot, tmp_path):
     directory = tmp_path / "no_procar"
     directory.mkdir()

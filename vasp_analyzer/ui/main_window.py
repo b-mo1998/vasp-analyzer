@@ -116,6 +116,7 @@ class MainWindow(QMainWindow):
         self._register_page(self._structure)
         self._bands = BandsPage(self._loader)
         self._register_page(self._bands)
+        self._bands.gapComputed.connect(self._info_bar.set_gap)
         self._inputs = InputsPage()
         self._register_page(self._inputs)
 

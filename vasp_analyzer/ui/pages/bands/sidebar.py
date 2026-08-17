@@ -5,6 +5,8 @@ from __future__ import annotations
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
+    QHBoxLayout,
     QScrollArea,
     QVBoxLayout,
     QWidget,
@@ -27,6 +29,7 @@ class BandsSidebar(QWidget):
     fermiChanged = Signal(float)
     dosToggled = Signal(bool)
     projectionToggled = Signal(str, bool)
+    orbitalChanged = Signal(object)  # str, or None for "All Orbitals"
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -86,6 +89,20 @@ class BandsSidebar(QWidget):
             layout.addWidget(box)
             self.projections[key] = box
 
+            if key == "element":
+                # Indented under its checkbox: which orbital to colour and
+                # size by, once PROCAR is loaded and the projection is on.
+                orbital_row = QHBoxLayout()
+                orbital_row.setContentsMargins(SPACING.xl, 0, 0, 0)
+                self.orbital_box = QComboBox()
+                self.orbital_box.addItem("All Orbitals")
+                self.orbital_box.setEnabled(False)
+                self.orbital_box.currentTextChanged.connect(self._on_orbital_changed)
+                orbital_row.addWidget(self.orbital_box, 1)
+                layout.addLayout(orbital_row)
+
+        self.projections["element"].toggled.connect(self._on_element_toggled)
+
         layout.addWidget(Divider())
 
         # -- display ------------------------------------------------------------
@@ -117,6 +134,37 @@ class BandsSidebar(QWidget):
         box.setToolTip("" if enabled else reason)
         if not enabled and box.isChecked():
             box.setChecked(False)
+
+    def set_orbitals(self, orbitals: list[str]) -> None:
+        """Populate the orbital selector once PROCAR has actually been read
+        — the orbital list isn't known until then."""
+        self.orbital_box.blockSignals(True)
+        self.orbital_box.clear()
+        self.orbital_box.addItem("All Orbitals")
+        self.orbital_box.addItems(orbitals)
+        self.orbital_box.blockSignals(False)
+        self.orbital_box.setEnabled(self.projections["element"].isChecked())
+
+    def clear_orbitals(self) -> None:
+        self.orbital_box.blockSignals(True)
+        self.orbital_box.clear()
+        self.orbital_box.addItem("All Orbitals")
+        self.orbital_box.blockSignals(False)
+        self.orbital_box.setEnabled(False)
+
+    def selected_orbital(self) -> str | None:
+        text = self.orbital_box.currentText()
+        return None if text == "All Orbitals" else text
+
+    def _on_element_toggled(self, checked: bool) -> None:
+        self.orbital_box.setEnabled(checked and self.orbital_box.count() > 1)
+        if not checked:
+            self.orbital_box.blockSignals(True)
+            self.orbital_box.setCurrentIndex(0)
+            self.orbital_box.blockSignals(False)
+
+    def _on_orbital_changed(self, text: str) -> None:
+        self.orbitalChanged.emit(None if text == "All Orbitals" else text)
 
     def set_dos_enabled(self, enabled: bool, reason: str = "") -> None:
         self.show_dos.setEnabled(enabled)

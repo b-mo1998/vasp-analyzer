@@ -51,6 +51,7 @@ class InfoBar(Card):
         ("system", "System"),
         ("method", "Method"),
         ("fermi", "Fermi Level"),
+        ("gap", "Gap"),
         ("kpoints", "K-Points"),
         ("encut", "ENCUT"),
         ("wannier", "Wannier90"),
@@ -114,6 +115,12 @@ class InfoBar(Card):
                 muted=True,
             )
 
+        # The gap needs the full EIGENVAL, which the Bands page reads lazily
+        # in the background — reset to unknown here and let set_gap() below
+        # fill it in once (and if) that data arrives, rather than showing a
+        # previous calculation's stale value in the meantime.
+        self._fields["gap"].set_value("—", muted=True)
+
         self._set("kpoints", display(meta.kmesh), meta.kmesh)
         self._set(
             "encut",
@@ -133,6 +140,15 @@ class InfoBar(Card):
             self._fields["wannier"].set_value(
                 "Partial" if has_any else "—", tooltip=reason, muted=not has_any
             )
+
+    def set_gap(self, text: str, tooltip: str = "") -> None:
+        """Called by the Bands page once EIGENVAL (and a Fermi level) are
+        actually available — the gap can't be known at discovery time.
+
+        "Metallic" is a determined fact, not a missing value, so only a
+        literal "—" is shown muted.
+        """
+        self._fields["gap"].set_value(text, tooltip=tooltip, muted=text == "—")
 
     def _set(self, key: str, text: str, sourced) -> None:
         tooltip = f"Read from {sourced.source}" if sourced is not None else ""

@@ -16,6 +16,21 @@ class KPathLabel:
     label: str          # display text, e.g. "Γ"
 
 
+@dataclass(frozen=True)
+class BandGap:
+    """A resolved band gap, with enough to say whether it's direct."""
+
+    gap: float          # eV
+    vbm: float          # eV, absolute
+    cbm: float          # eV, absolute
+    vbm_kpoint: int
+    cbm_kpoint: int
+
+    @property
+    def is_direct(self) -> bool:
+        return self.vbm_kpoint == self.cbm_kpoint
+
+
 @dataclass
 class BandData:
     """Eigenvalues on a k-point list, as read from EIGENVAL.
@@ -85,18 +100,32 @@ class BandData:
             return None  # bands overlap: metallic, midpoint would be misleading
         return 0.5 * (homo + lumo)
 
-    def band_gap(self, e_fermi: float) -> tuple[float, float, float] | None:
-        """Return (gap, vbm, cbm) in eV relative to nothing (absolute energies).
+    def band_gap(self, e_fermi: float) -> BandGap | None:
+        """The band gap relative to a given Fermi level, classified as direct
+        or indirect by whether the valence-band maximum and conduction-band
+        minimum occur at the same k-point.
 
-        Returns None when the system is metallic or the gap cannot be resolved.
+        Returns None when the system is metallic (VBM/CBM overlap or every
+        state is occupied/unoccupied) or the gap can't be resolved.
         """
-        below = self.energies[self.energies <= e_fermi + 1e-6]
-        above = self.energies[self.energies > e_fermi + 1e-6]
-        if below.size == 0 or above.size == 0:
+        occupied = self.energies <= e_fermi + 1e-6  # (nspin, nk, nbands)
+        if not occupied.any() or occupied.all():
             return None
-        vbm = float(below.max())
-        cbm = float(above.min())
+
+        # Per k-point, the highest occupied and lowest unoccupied energy
+        # (across spin and band) — collapsing straight to a global max/min
+        # would give the right *value* but lose which k-point it came from,
+        # which is exactly what direct-vs-indirect depends on.
+        occupied_energies = np.where(occupied, self.energies, -np.inf)
+        unoccupied_energies = np.where(~occupied, self.energies, np.inf)
+        per_k_vbm = occupied_energies.max(axis=(0, 2))
+        per_k_cbm = unoccupied_energies.min(axis=(0, 2))
+
+        k_vbm = int(np.argmax(per_k_vbm))
+        k_cbm = int(np.argmin(per_k_cbm))
+        vbm = float(per_k_vbm[k_vbm])
+        cbm = float(per_k_cbm[k_cbm])
         gap = cbm - vbm
         if gap <= 1e-4:
             return None
-        return gap, vbm, cbm
+        return BandGap(gap=gap, vbm=vbm, cbm=cbm, vbm_kpoint=k_vbm, cbm_kpoint=k_cbm)
