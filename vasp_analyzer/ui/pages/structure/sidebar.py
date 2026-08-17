@@ -8,13 +8,13 @@ from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
     QScrollArea,
-    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 
 from ...theme import PALETTE, SPACING, TYPE
 from ...widgets.primitives import Divider, Label, SectionHeader
+from ...widgets.stepper import IntegerStepper
 
 STYLES = ["Ball-and-Stick", "Space Filling", "Wireframe"]
 COLORINGS = ["By Element"]
@@ -78,16 +78,17 @@ class StructureSidebar(QWidget):
 
         layout.addWidget(SectionHeader("Supercell"))
         cell_row = QHBoxLayout()
-        cell_row.setSpacing(SPACING.sm)
-        self.supercell_boxes: dict[str, QSpinBox] = {}
+        cell_row.setSpacing(SPACING.md)
+        self.supercell_boxes: dict[str, IntegerStepper] = {}
         for axis in ("a", "b", "c"):
             axis_layout = QVBoxLayout()
-            axis_layout.setSpacing(2)
+            axis_layout.setSpacing(SPACING.xs)
             axis_label = self._caption(axis)
+            axis_label.setStyleSheet(
+                axis_label.styleSheet() + f" font-weight: 600; font-size: {TYPE.body}px;"
+            )
             axis_layout.addWidget(axis_label)
-            box = QSpinBox()
-            box.setRange(1, MAX_SUPERCELL_REPEAT)
-            box.setValue(1)
+            box = IntegerStepper(minimum=1, maximum=MAX_SUPERCELL_REPEAT, value=1)
             box.valueChanged.connect(self._on_supercell_value_changed)
             axis_layout.addWidget(box)
             self.supercell_boxes[axis] = box

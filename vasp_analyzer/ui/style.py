@@ -249,6 +249,47 @@ def build_stylesheet() -> str:
     }}
     QComboBox:hover {{ border-color: {p.border_strong}; }}
     QComboBox::drop-down {{ border: none; width: 22px; }}
+    /* ---- Integer stepper ------------------------------------------------ */
+    /* Not QSpinBox — see ui/widgets/stepper.py for why. Explicit +/- buttons,
+       large and unambiguous, in the same #ToolButton spirit as the viewer's
+       zoom controls. */
+    #StepperButtonLeft, #StepperButtonRight {{
+        background: {p.surface};
+        border: 1px solid {p.border};
+        color: {p.text_secondary};
+        font-size: 15px;
+        font-weight: 600;
+    }}
+    #StepperButtonLeft {{
+        border-top-left-radius: {r.md}px;
+        border-bottom-left-radius: {r.md}px;
+        border-right: none;
+    }}
+    #StepperButtonRight {{
+        border-top-right-radius: {r.md}px;
+        border-bottom-right-radius: {r.md}px;
+        border-left: none;
+    }}
+    #StepperButtonLeft:hover:enabled, #StepperButtonRight:hover:enabled {{
+        background: {p.surface_hover}; color: {p.text};
+    }}
+    #StepperButtonLeft:pressed:enabled, #StepperButtonRight:pressed:enabled {{
+        background: {p.border};
+    }}
+    #StepperButtonLeft:disabled, #StepperButtonRight:disabled {{
+        color: {p.disabled_text};
+    }}
+    #StepperField {{
+        background: {p.surface};
+        border: 1px solid {p.border};
+        border-left: none;
+        border-right: none;
+        font-size: {t.body}px;
+        font-weight: 500;
+    }}
+    #StepperField:focus {{ border-color: {p.border}; }}
+    #StepperField:disabled {{ color: {p.disabled_text}; background: {p.surface_sunken}; }}
+
     QComboBox QAbstractItemView {{
         background: {p.surface};
         border: 1px solid {p.border};
