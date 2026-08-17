@@ -25,7 +25,9 @@ from ....models.calculation import Calculation
 from ....models.capabilities import Capability
 from ....models.structure import StructureData
 from ....services import appearance
+from ....services.bonds import MAX_ATOMS_FOR_BONDS
 from ....services.loader import DATASET_STRUCTURE, DataLoader
+from ....services.supercell import build_supercell, cell_count
 from ....services.symmetry import analyse
 from ...style import icon_url
 from ...theme import METRICS, PALETTE, RADIUS, SPACING, TYPE
@@ -118,7 +120,9 @@ class StructurePage(Page):
         super().__init__(parent)
         self._loader = loader
         self._sidebar = StructureSidebar()
-        self._structure: StructureData | None = None
+        self._base_structure: StructureData | None = None  # as parsed, untiled
+        self._structure: StructureData | None = None        # currently rendered
+        self._supercell: tuple[int, int, int] = (1, 1, 1)
 
         self._build()
         self._connect()
@@ -272,6 +276,7 @@ class StructurePage(Page):
         self._view.atomSelected.connect(self._on_atom_selected)
         self._view.measurementChanged.connect(self._info.show_measurement)
         self._info.fileRequested.connect(self.navigationRequested)
+        self._sidebar.supercellChanged.connect(self._on_supercell_changed)
 
     def eventFilter(self, watched, event):  # noqa: N802 - Qt naming
         if watched is self._canvas_holder and event.type() in (
@@ -309,7 +314,14 @@ class StructurePage(Page):
 
     def set_calculation(self, calculation: Calculation | None) -> None:
         super().set_calculation(calculation)
+        self._base_structure = None
         self._structure = None
+        self._supercell = (1, 1, 1)
+        for box in self._sidebar.supercell_boxes.values():
+            box.blockSignals(True)
+            box.setValue(1)
+            box.blockSignals(False)
+        self._sidebar.set_supercell_hint("")
         self._notice.clear()
         self._view.set_structure(None)
         self._info.clear()
@@ -356,24 +368,53 @@ class StructurePage(Page):
 
         structure = result.value
         # spglib is only worth the import once a structure is actually shown.
+        # It always runs on the base cell: a supercell has the same symmetry
+        # family, and re-deriving it from a larger, non-primitive cell is both
+        # slower and can report a different setting than the one the
+        # calculation actually used.
         analyse(structure)
+
+        self._base_structure = structure
+        self._info.update_structure(structure, self.calculation())
+        self._apply_supercell()
+        self._stack.setCurrentIndex(0)
+
+    def _on_supercell_changed(self, na: int, nb: int, nc: int) -> None:
+        self._supercell = (na, nb, nc)
+        if self._base_structure is not None:
+            self._apply_supercell()
+
+    def _apply_supercell(self) -> None:
+        assert self._base_structure is not None
+        na, nb, nc = self._supercell
+        structure = build_supercell(self._base_structure, na, nb, nc)
 
         self._structure = structure
         self._view.set_structure(structure)
-        self._info.update_structure(structure, self.calculation())
         self._update_legend(structure)
         self._update_status(structure)
-        self._stack.setCurrentIndex(0)
+
+        cells = cell_count(na, nb, nc)
+        if cells == 1:
+            self._sidebar.set_supercell_hint("")
+        else:
+            hint = f"{structure.n_atoms} atoms across {cells} cells"
+            if structure.n_atoms > MAX_ATOMS_FOR_BONDS:
+                hint += " — too many to draw bonds"
+            self._sidebar.set_supercell_hint(hint)
 
     def _update_status(self, structure: StructureData) -> None:
         parts = [f"Atoms: {structure.n_atoms}"]
         for element, count in sorted(structure.composition.items()):
             parts.append(f"{element}: {count}")
-        if structure.space_group_number is not None:
+        base = self._base_structure
+        if base is not None and base.space_group_number is not None:
             parts.append(
-                f"Space Group: {structure.space_group_symbol} "
-                f"({structure.space_group_number})"
+                f"Space Group: {base.space_group_symbol} ({base.space_group_number})"
             )
+        if self._supercell != (1, 1, 1):
+            na, nb, nc = self._supercell
+            parts.append(f"{na}×{nb}×{nc} supercell")
         self._status.setText("      ".join(parts))
 
     def _update_legend(self, structure: StructureData) -> None:

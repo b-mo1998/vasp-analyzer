@@ -254,6 +254,41 @@ def test_structure_page_renders_a_structure(window, qtbot, tmp_path):
     assert "Atoms:" in page._status.text()
 
 
+def test_supercell_tiling_end_to_end(window, qtbot, tmp_path):
+    directory = tmp_path / "supercell"
+    directory.mkdir()
+    fixtures.case_a_complete(directory)  # silicon, 2 atoms (write_poscar's default)
+
+    window.open_directory(directory)
+    window._nav.setCurrentIndex(0)
+    qtbot.wait(150)
+
+    page = window._structure
+    qtbot.waitUntil(lambda: page._structure is not None, timeout=5000)
+    base_atoms = page._base_structure.n_atoms
+    space_group = page._base_structure.space_group_number
+    assert base_atoms > 0 and space_group is not None
+
+    sidebar = page._sidebar
+    sidebar.supercell_boxes["a"].setValue(2)
+    sidebar.supercell_boxes["b"].setValue(2)
+    qtbot.wait(60)
+
+    # The rendered structure is tiled...
+    assert page._structure.n_atoms == base_atoms * 2 * 2 * 1
+    assert page._view._structure.n_atoms == base_atoms * 2 * 2 * 1
+    assert "atoms across 4 cells" in sidebar.supercell_hint.text()
+    # ...but the info panel's lattice parameters still describe the
+    # primitive cell, not an inflated supercell.
+    assert "5.4667" in page._info._rows["a"]._value.text()
+    # Symmetry is not silently dropped or re-derived on the bigger cell.
+    assert str(space_group) in page._info._rows["space_group"]._value.text()
+
+    page.reset()
+    assert page._structure.n_atoms == base_atoms
+    assert sidebar.supercell_boxes["a"].value() == 1
+
+
 def test_measure_toolbar_button_switches_the_viewer_mode(window, qtbot, tmp_path):
     from vasp_analyzer.ui.pages.structure.viewer import StructureView
 
