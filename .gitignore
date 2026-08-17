@@ -15,3 +15,6 @@ Silicon Files/
 *.spn
 WAVECAR
 CHGCAR
+
+# Generated review screenshots
+review/
