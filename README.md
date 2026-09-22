@@ -38,7 +38,7 @@ for example) rather than Anaconda's x86_64 build, which would run the whole GUI
 under Rosetta.
 
 ```bash
-git clone https://github.com/YOUR-USERNAME/vasp-analyzer.git
+git clone https://github.com/b-mo1998/vasp-analyzer.git
 cd vasp-analyzer
 python3 -m venv .venv
 .venv/bin/pip install -e ".[dev]"
