@@ -1,21 +1,46 @@
+# --- Python -----------------------------------------------------------------
 .venv/
+venv/
 __pycache__/
 *.py[cod]
 *.egg-info/
+.pytest_cache/
+
+# --- Build output -----------------------------------------------------------
 build/
 dist/
-.pytest_cache/
-.DS_Store
-.env
-*.log
+*.spec.bak
+VASP Analyzer.app/
+*.zip
 
-# Never commit calculation data or credentials
+# --- macOS ------------------------------------------------------------------
+.DS_Store
+
+# --- Secrets ----------------------------------------------------------------
+.env
+*.chk
+
+# --- VASP calculation data --------------------------------------------------
+# Real calculation directories are gigabytes of CHGCAR/WAVECAR and belong in
+# your own storage, not in a source repository. The test-suite generates all
+# the data it needs, so nothing here is required to build or run the app.
+CNT/
+Silicon/
 Silicon Files/
 Graphene/
-*.chk
-*.spn
+*.log
+
+# Common VASP output files, wherever they appear
 WAVECAR
 CHGCAR
+CHG
+PROCAR
+vasprun.xml
+AECCAR*
+PARCHG
+ELFCAR
+LOCPOT
 
-# Generated review screenshots
+# --- Working screenshots ----------------------------------------------------
+# docs/screenshots/ is tracked deliberately; this is the old scratch folder.
 review/
