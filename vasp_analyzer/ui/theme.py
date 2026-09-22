@@ -74,6 +74,12 @@ class Metrics:
     nav_height: int = 34
     control_height: int = 28
     toolbar_button_height: int = 32
+    # The height a #ToolButton actually renders at: the stylesheet's
+    # min-height is a content height, and the 1px border top and bottom
+    # sits outside it. Every control floating over a 3D viewer -- tool
+    # buttons, pop-out button, orientation bar -- is sized to this, so the
+    # row along the top of a viewer is one height end to end.
+    viewer_control_height: int = 34
 
 
 PALETTE = Palette()

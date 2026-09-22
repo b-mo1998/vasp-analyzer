@@ -15,7 +15,12 @@ from ...plotting import PixelMargins, PlotCanvas
 from ...theme import PALETTE
 
 # Top and bottom must equal BAND_MARGINS for the shared energy axis to align.
-DOS_MARGINS = PixelMargins(left=40, right=14, top=12, bottom=42)
+DOS_MARGINS = PixelMargins(left=40, right=14, top=12, bottom=54)
+
+# Matches BandPlot.TICK_LABEL_SIZE — the two plots share one visual energy
+# axis, so their tick numbers must match in both size and colour or the two
+# halves would read as different plots stitched together.
+TICK_LABEL_SIZE = 10.5
 
 
 class DosPlot(PlotCanvas):
@@ -76,7 +81,9 @@ class DosPlot(PlotCanvas):
         axes.clear()
         self._style_axes()
         axes.set_xlabel("States / eV")
-        axes.tick_params(labelleft=True)
+        axes.tick_params(
+            axis="both", labelleft=True, colors=PALETTE.text, labelsize=TICK_LABEL_SIZE
+        )
 
         dos = self._dos
         if dos is None:

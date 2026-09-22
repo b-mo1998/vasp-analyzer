@@ -33,9 +33,13 @@ class InfoField(QWidget):
         self._value.setStyleSheet(f"font-size: {TYPE.body}px; font-weight: 500;")
         layout.addWidget(self._value)
 
-    def set_value(self, text: str, tooltip: str = "", muted: bool = False) -> None:
+    def set_value(
+        self, text: str, tooltip: str = "", muted: bool = False, color: str | None = None
+    ) -> None:
+        """``color`` overrides the text colour -- for a value that *is* a
+        state, like the Editor's green "Saved" / amber "Modified"."""
         self._value.setText(text)
-        color = PALETTE.text_tertiary if muted else PALETTE.text
+        color = color or (PALETTE.text_tertiary if muted else PALETTE.text)
         self._value.setStyleSheet(
             f"font-size: {TYPE.body}px; font-weight: 500; color: {color};"
         )
@@ -43,7 +47,13 @@ class InfoField(QWidget):
 
 
 class InfoBar(Card):
-    """The horizontal metadata strip at the bottom of the window."""
+    """The horizontal metadata strip at the bottom of the window.
+
+    The strip describes whatever the current page is about, so its fields are
+    swappable: an electronic-structure page wants the Fermi level and the gap,
+    while a trajectory page wants frames, timestep and ensemble. Pages that
+    need the alternative set call :meth:`set_layout` and then :meth:`set_fields`.
+    """
 
     detailsRequested = Signal()
 
@@ -57,6 +67,67 @@ class InfoBar(Card):
         ("wannier", "Wannier90"),
     ]
 
+    MD_FIELDS = [
+        ("system", "System"),
+        ("frames", "Frames"),
+        ("timestep", "Timestep"),
+        ("duration", "Duration"),
+        ("ensemble", "Ensemble"),
+        ("temperature", "Temperature"),
+    ]
+
+    NEB_FIELDS = [
+        ("system", "System"),
+        ("images", "Images"),
+        ("method", "Method"),
+        ("barrier", "Barrier"),
+        ("force", "Max Force"),
+        ("convergence", "Convergence"),
+    ]
+
+    CHARGE_FIELDS = [
+        ("system", "System"),
+        ("source", "Source"),
+        ("datatype", "Data Type"),
+        ("grid", "Grid"),
+        ("volume", "Cell Volume"),
+        ("integrated", "Integrated e⁻"),
+        ("spin", "Spin"),
+    ]
+
+    # The Editor's old status strip, folded in here so the page has one
+    # bottom bar rather than two stacked ones both starting with "System".
+    EDITOR_FIELDS = [
+        ("system", "System"),
+        ("atoms", "Atoms"),
+        ("selected", "Selected"),
+        ("mode", "Mode"),
+        ("gap", "Gap"),
+        ("kpoints", "K-Points"),
+        ("encut", "ENCUT"),
+        ("status", "Status"),
+    ]
+
+    PHONON_FIELDS = [
+        ("system", "System"),
+        ("calculation", "Calculation"),
+        ("supercell", "Supercell"),
+        ("atoms", "Atoms"),
+        ("qgrid", "Q-point Grid"),
+        ("branches", "Branches"),
+        ("imaginary", "Imaginary Modes"),
+        ("maxfreq", "Max Frequency"),
+    ]
+
+    LAYOUTS = {
+        "default": FIELDS,
+        "md": MD_FIELDS,
+        "neb": NEB_FIELDS,
+        "charge": CHARGE_FIELDS,
+        "phonon": PHONON_FIELDS,
+        "editor": EDITOR_FIELDS,
+    }
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent, padding=SPACING.md)
         self.setFixedHeight(METRICS.info_bar_height)
@@ -64,12 +135,11 @@ class InfoBar(Card):
         row = QHBoxLayout()
         row.setContentsMargins(SPACING.sm, 0, 0, 0)
         row.setSpacing(SPACING.xxl)
+        self._row = row
 
         self._fields: dict[str, InfoField] = {}
-        for key, caption in self.FIELDS:
-            field = InfoField(caption)
-            self._fields[key] = field
-            row.addWidget(field)
+        self._layout_name = "default"
+        self._build_fields(self.FIELDS)
 
         row.addStretch(1)
 
@@ -83,6 +153,51 @@ class InfoBar(Card):
 
         self.body().addLayout(row)
 
+    def _build_fields(self, spec: list[tuple[str, str]]) -> None:
+        # Called only during construction, before the stretch and the details
+        # button exist, so plain appends are in the right place.
+        for key, caption in spec:
+            field = InfoField(caption)
+            self._fields[key] = field
+            self._row.addWidget(field)
+
+    # -- layout ------------------------------------------------------------
+
+    def set_layout(self, name: str) -> None:
+        """Switch to a named field set, rebuilding the strip if it changed."""
+        if name == self._layout_name:
+            return
+        spec = self.LAYOUTS.get(name)
+        if spec is None:
+            return
+        self._layout_name = name
+
+        for field in self._fields.values():
+            self._row.removeWidget(field)
+            field.setParent(None)
+            field.deleteLater()
+        self._fields.clear()
+
+        for index, (key, caption) in enumerate(spec):
+            field = InfoField(caption)
+            self._fields[key] = field
+            self._row.insertWidget(index, field)
+        self.clear()
+
+    def current_layout(self) -> str:
+        return self._layout_name
+
+    def set_fields(
+        self, values: dict[str, str], colors: dict[str, str] | None = None
+    ) -> None:
+        """Populate the current layout from a page-supplied mapping."""
+        colors = colors or {}
+        for key, field in self._fields.items():
+            text = values.get(key, "—")
+            field.set_value(
+                text or "—", muted=text in ("", "—"), color=colors.get(key)
+            )
+
     # -- population --------------------------------------------------------
 
     def clear(self) -> None:
@@ -90,6 +205,8 @@ class InfoBar(Card):
             field.set_value("—", muted=True)
 
     def update_from(self, calculation: Calculation | None) -> None:
+        if self._layout_name != "default":
+            return
         if calculation is None:
             self.clear()
             return
@@ -148,7 +265,9 @@ class InfoBar(Card):
         "Metallic" is a determined fact, not a missing value, so only a
         literal "—" is shown muted.
         """
-        self._fields["gap"].set_value(text, tooltip=tooltip, muted=text == "—")
+        field = self._fields.get("gap")
+        if field is not None:
+            field.set_value(text, tooltip=tooltip, muted=text == "—")
 
     def _set(self, key: str, text: str, sourced) -> None:
         tooltip = f"Read from {sourced.source}" if sourced is not None else ""

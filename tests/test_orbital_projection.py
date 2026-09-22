@@ -14,7 +14,12 @@ import pytest
 
 from vasp_analyzer.models.bands import BandData
 from vasp_analyzer.parsers.procar import ProcarData
-from vasp_analyzer.ui.pages.bands.projection import build_element_overlay
+from vasp_analyzer.ui.pages.bands.projection import (
+    ORBITAL_PALETTE,
+    build_element_overlay,
+    build_orbital_overlay,
+    legend_orbitals,
+)
 
 
 def _procar_with_two_orbitals() -> ProcarData:
@@ -49,8 +54,8 @@ def test_total_weight_without_orbital_sums_everything():
 
 def test_total_weight_restricted_to_one_orbital():
     data = _procar_with_two_orbitals()
-    s_only = data.total_weight(orbital="s")
-    pz_only = data.total_weight(orbital="pz")
+    s_only = data.total_weight(orbitals=["s"])
+    pz_only = data.total_weight(orbitals=["pz"])
 
     assert s_only[0, 0] == pytest.approx(0.9)
     assert s_only[0, 1] == pytest.approx(0.0)  # band 1 has no "s" character
@@ -58,16 +63,38 @@ def test_total_weight_restricted_to_one_orbital():
     assert pz_only[0, 1] == pytest.approx(0.7)
 
 
+def test_total_weight_restricted_to_multiple_orbitals_sums_them():
+    data = _procar_with_two_orbitals()
+    both = data.total_weight(orbitals=["s", "pz"])
+    assert both[0, 0] == pytest.approx(0.9)  # same as "s" alone: band 0 has no pz
+    assert both[0, 1] == pytest.approx(0.7)  # same as "pz" alone: band 1 has no s
+
+
 def test_element_weight_respects_orbital_restriction():
     data = _procar_with_two_orbitals()
-    weight = data.element_weight(["C"], "C", orbital="pz")
+    weight = data.element_weight(["C"], "C", orbitals=["pz"])
     assert weight[0, 0] == pytest.approx(0.0)
     assert weight[0, 1] == pytest.approx(0.7)
 
 
 def test_unknown_orbital_returns_zero_not_an_error():
     data = _procar_with_two_orbitals()
-    weight = data.total_weight(orbital="dxy")  # not in this fixture's orbital list
+    weight = data.total_weight(orbitals=["dxy"])  # not in this fixture's orbital list
+    assert np.all(weight == 0.0)
+
+
+def test_unknown_orbital_mixed_with_known_ignores_only_the_unknown():
+    data = _procar_with_two_orbitals()
+    weight = data.total_weight(orbitals=["pz", "dxy"])
+    assert weight[0, 0] == pytest.approx(0.0)
+    assert weight[0, 1] == pytest.approx(0.7)  # same as ["pz"] alone
+
+
+def test_empty_orbital_list_yields_zero_not_all_orbitals():
+    # An explicit empty selection ("user unchecked everything") means nothing
+    # contributes — distinct from orbitals=None, which means unfiltered.
+    data = _procar_with_two_orbitals()
+    weight = data.total_weight(orbitals=[])
     assert np.all(weight == 0.0)
 
 
@@ -78,8 +105,8 @@ def test_overlay_orbital_filter_changes_which_band_lights_up():
     bands = _bands()
     procar = _procar_with_two_orbitals()
 
-    s_overlay = build_element_overlay(bands, procar, ["C"], orbital="s")
-    pz_overlay = build_element_overlay(bands, procar, ["C"], orbital="pz")
+    s_overlay = build_element_overlay(bands, procar, ["C"], orbitals=["s"])
+    pz_overlay = build_element_overlay(bands, procar, ["C"], orbitals=["pz"])
 
     # Band 0 (pure "s") is large under the s filter, negligible under pz.
     assert s_overlay.sizes[0][0, 0] > pz_overlay.sizes[0][0, 0]
@@ -87,10 +114,23 @@ def test_overlay_orbital_filter_changes_which_band_lights_up():
     assert pz_overlay.sizes[0][0, 1] > s_overlay.sizes[0][0, 1]
 
 
+def test_overlay_multi_orbital_selection_shows_both_bands():
+    bands = _bands()
+    procar = _procar_with_two_orbitals()
+
+    combined = build_element_overlay(bands, procar, ["C"], orbitals=["s", "pz"])
+    pz_only = build_element_overlay(bands, procar, ["C"], orbitals=["pz"])
+
+    # With both s and pz selected, band 0 ("s") lights up too, unlike pz-only.
+    assert combined.sizes[0][0, 0] > pz_only.sizes[0][0, 0]
+    # Band 1 ("pz") is unaffected by adding "s" to the selection.
+    assert combined.sizes[0][0, 1] == pytest.approx(pz_only.sizes[0][0, 1])
+
+
 def test_no_orbital_filter_matches_total_weight_behaviour():
     bands = _bands()
     procar = _procar_with_two_orbitals()
-    overlay = build_element_overlay(bands, procar, ["C"], orbital=None)
+    overlay = build_element_overlay(bands, procar, ["C"], orbitals=None)
     assert overlay.sizes[0][0, 0] > overlay.sizes[0][0, 1] * 0.5  # both bands show up
 
 
@@ -107,7 +147,57 @@ def test_graphene_pz_isolates_the_pi_bands_and_dims_sigma_bands(tmp_path):
     # fixtures.write_procar puts all weight on orbital 0 ("s"); band 2 (index 1)
     # carries more of it than band 1, per the fixture's `band_index + 1` scheme.
     bands = _bands(n_kpoints=1, n_bands=2)
-    overlay_s = build_element_overlay(bands, procar, ["C"], orbital="s")
-    overlay_pz = build_element_overlay(bands, procar, ["C"], orbital="pz")
+    overlay_s = build_element_overlay(bands, procar, ["C"], orbitals=["s"])
+    overlay_pz = build_element_overlay(bands, procar, ["C"], orbitals=["pz"])
 
     assert overlay_s.sizes[0][0, 1] > overlay_pz.sizes[0][0, 1]
+
+
+# --- orbital-coloured overlay (multi-orbital selection) -----------------------
+
+
+def test_orbital_overlay_gives_each_orbital_its_own_colour():
+    bands = _bands()
+    procar = _procar_with_two_orbitals()
+
+    overlay = build_orbital_overlay(bands, procar, ["s", "pz"])
+
+    # Band 0 is pure "s" (1st selected -> black), band 1 is pure "pz" (2nd
+    # selected -> red): the two points must come out as different colours,
+    # not the same flat element colour.
+    color_band0 = overlay.colors[0][0, 0, :3]
+    color_band1 = overlay.colors[0][0, 1, :3]
+    assert not np.allclose(color_band0, color_band1)
+    np.testing.assert_allclose(color_band0, [0.0, 0.0, 0.0], atol=1e-6)  # black
+    from matplotlib.colors import to_rgb
+
+    np.testing.assert_allclose(color_band1, to_rgb(ORBITAL_PALETTE[1]), atol=1e-6)  # red
+
+
+def test_orbital_overlay_selection_order_controls_colour_not_orbital_name():
+    bands = _bands()
+    procar = _procar_with_two_orbitals()
+
+    # Same two orbitals, reversed selection order: colours swap accordingly.
+    overlay = build_orbital_overlay(bands, procar, ["pz", "s"])
+    from matplotlib.colors import to_rgb
+
+    color_band0 = overlay.colors[0][0, 0, :3]  # pure "s"
+    color_band1 = overlay.colors[0][0, 1, :3]  # pure "pz"
+    np.testing.assert_allclose(color_band1, [0.0, 0.0, 0.0], atol=1e-6)  # pz checked 1st -> black
+    np.testing.assert_allclose(color_band0, to_rgb(ORBITAL_PALETTE[1]), atol=1e-6)  # s 2nd -> red
+
+
+def test_orbital_overlay_requires_a_non_empty_selection():
+    bands = _bands()
+    procar = _procar_with_two_orbitals()
+    assert build_orbital_overlay(bands, procar, []) is None
+
+
+def test_legend_orbitals_matches_overlay_colour_order():
+    legend = legend_orbitals(["pz", "px", "s"])
+    assert legend == [
+        ("pz", ORBITAL_PALETTE[0]),
+        ("px", ORBITAL_PALETTE[1]),
+        ("s", ORBITAL_PALETTE[2]),
+    ]

@@ -8,9 +8,36 @@ missing, or a file that failed to parse. These are quiet, centred explanations
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import QLabel, QPushButton, QVBoxLayout, QWidget
 
 from ..theme import PALETTE, SPACING, TYPE
+
+MESSAGE_WIDTH = 360
+
+
+def _wrap_to_width(metrics: QFontMetrics, text: str, max_width: int) -> str:
+    """Break ``text`` into lines no wider than ``max_width`` pixels.
+
+    Used instead of ``QLabel.setWordWrap(True)`` for centred multi-line
+    messages: a word-wrapped QLabel only computes its height correctly when
+    added to a layout *without* an alignment flag, and only centres correctly
+    *with* one — there is no combination that gets both right. Wrapping the
+    text by hand up front turns it into an ordinary fixed-line-count label,
+    which has neither problem.
+    """
+    lines: list[str] = []
+    current = ""
+    for word in text.split():
+        candidate = f"{current} {word}".strip()
+        if not current or metrics.horizontalAdvance(candidate) <= max_width:
+            current = candidate
+        else:
+            lines.append(current)
+            current = word
+    if current:
+        lines.append(current)
+    return "\n".join(lines)
 
 
 class EmptyState(QWidget):
@@ -48,14 +75,13 @@ class EmptyState(QWidget):
         )
         layout.addWidget(self._title)
 
-        self._message = QLabel(message)
+        self._message = QLabel()
         self._message.setAlignment(Qt.AlignCenter)
-        self._message.setWordWrap(True)
-        self._message.setMaximumWidth(420)
         self._message.setStyleSheet(
             f"font-size: {TYPE.body}px; color: {PALETTE.text_secondary};"
         )
         layout.addWidget(self._message, 0, Qt.AlignCenter)
+        self._set_message(message)
 
         self._button: QPushButton | None = None
         if action:
@@ -69,6 +95,10 @@ class EmptyState(QWidget):
 
         layout.addStretch(1)
 
+    def _set_message(self, message: str) -> None:
+        metrics = QFontMetrics(self._message.font())
+        self._message.setText(_wrap_to_width(metrics, message, MESSAGE_WIDTH))
+
     def set_text(self, title: str, message: str = "") -> None:
         self._title.setText(title)
-        self._message.setText(message)
+        self._set_message(message)

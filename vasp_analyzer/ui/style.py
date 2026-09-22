@@ -134,7 +134,7 @@ def build_stylesheet() -> str:
         background: transparent;
         border: none;
         border-radius: {r.md}px;
-        padding: 0 {s.xl}px;
+        padding: 0 {s.lg}px;
         min-height: {m.nav_height}px;
         font-size: {t.body}px;
         font-weight: 500;
@@ -170,6 +170,34 @@ def build_stylesheet() -> str:
     #ToolButton:disabled {{
         color: {p.disabled_text};
         border-color: {p.border};
+    }}
+
+    /* ---- Loop toggle (Phonons animation) ------------------------------ */
+    /* Its own selector rather than a blanket #ToolButton:checked rule: the
+       tool-mode groups elsewhere (Select/Rotate/Pan, …) draw a dark icon
+       that would lose all contrast against an accent-blue checked
+       background, and giving every checkable ToolButton this treatment at
+       once risked making those unreadable as a side effect of a change that
+       was only ever about the loop toggle. */
+    #LoopButton:checked {{
+        background: {p.accent};
+        border-color: {p.accent};
+    }}
+    #LoopButton:checked:hover:enabled {{
+        background: {p.accent_hover};
+        border-color: {p.accent_hover};
+    }}
+
+    /* ---- Floating viewer toolbar ------------------------------------- */
+    /* The cluster of tool buttons that floats over a 3D viewport. No panel
+       of its own: each button already carries a white fill and a border, so
+       a second translucent-white slab behind them only reads as a grey box
+       swallowing a corner of the render. Leaving it transparent lets the
+       structure show through the gaps between the buttons, which is both
+       less chrome and more of the thing the user came to look at. */
+    #ViewerToolbar {{
+        background: transparent;
+        border: none;
     }}
 
     /* ---- Primary button --------------------------------------------- */

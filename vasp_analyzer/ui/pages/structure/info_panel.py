@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QScrollArea,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -28,7 +29,15 @@ STATUS_GLYPH = {
 
 
 class InfoRow(QWidget):
-    """A caption on the left, a value on the right, with a hairline beneath."""
+    """A caption on the left, a value on the right, with a hairline beneath.
+
+    A value too long for the space beside its caption wraps onto further
+    lines rather than being cut off. The panel has a fixed width by design
+    (so the viewer gets every spare pixel), which means "make the window
+    bigger" can never reveal a truncated value -- so nothing may be
+    truncated. Wrapping keeps every character readable at any width; the
+    row simply grows taller.
+    """
 
     def __init__(
         self, caption: str, value: str = "—", parent: QWidget | None = None
@@ -40,16 +49,25 @@ class InfoRow(QWidget):
 
         row = QHBoxLayout()
         row.setContentsMargins(0, 6, 0, 6)
+        row.setSpacing(SPACING.md)
         self._caption = QLabel(caption)
         self._caption.setStyleSheet(f"color: {PALETTE.text_secondary};")
-        row.addWidget(self._caption)
-        row.addStretch(1)
+        self._caption.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        row.addWidget(self._caption, 0)
 
         self._value = QLabel(value)
         self._value.setStyleSheet(f"color: {PALETTE.text}; font-weight: 500;")
-        self._value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self._value.setAlignment(Qt.AlignRight | Qt.AlignTop)
         self._value.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        row.addWidget(self._value)
+        self._value.setWordWrap(True)
+        # Ignored horizontally so the *text* never dictates the row's width
+        # -- a QLabel's minimum size is otherwise its full unwrapped text,
+        # which is exactly what pushed the whole panel past the window edge
+        # on a long POSCAR comment. Given only the space left over, the label
+        # wraps to fit it.
+        self._value.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self._value.setMinimumWidth(0)
+        row.addWidget(self._value, 1)
         layout.addLayout(row)
 
         rule = QWidget()
@@ -58,9 +76,9 @@ class InfoRow(QWidget):
         layout.addWidget(rule)
 
     def set_value(self, text: str, muted: bool = False) -> None:
-        self._value.setText(text)
         colour = PALETTE.text_tertiary if muted else PALETTE.text
         self._value.setStyleSheet(f"color: {colour}; font-weight: 500;")
+        self._value.setText(text)
 
 
 class FileLink(QWidget):
@@ -181,12 +199,63 @@ class StructureInfoPanel(QWidget):
             ("element", "Element"),
             ("frac", "Fractional"),
             ("cart", "Cartesian (Å)"),
+            ("wyckoff", "Wyckoff"),
+            ("equivalents", "Equivalent atoms"),
+            ("moment", "Moment (μB)"),
+            ("spin", "S(x, y, z) μB"),
+            ("displacement", "Relaxed by"),
         ):
             row = InfoRow(caption)
             self._rows[f"atom_{key}"] = row
             atom_body.addWidget(row)
+        # The last four only mean something when the data behind them
+        # exists; hidden otherwise rather than shown as a column of dashes.
+        for key in ("wyckoff", "equivalents", "moment", "spin", "displacement"):
+            self._rows[f"atom_{key}"].hide()
         self._atom_card.hide()
         layout.addWidget(self._atom_card)
+
+        # --- relaxation --------------------------------------------------------
+        self._relax_card = Card()
+        relax_body = self._relax_card.body()
+        relax_body.addWidget(ThemedLabel("Relaxation (POSCAR → CONTCAR)", "CardTitle"))
+        for key, caption in (
+            ("relax_mean", "Mean"),
+            ("relax_rms", "RMS"),
+        ):
+            row = InfoRow(caption)
+            self._rows[key] = row
+            relax_body.addWidget(row)
+        relax_body.addSpacing(SPACING.xs)
+        movers_title = QLabel("Most displaced")
+        movers_title.setStyleSheet(
+            f"color: {PALETTE.text_secondary}; font-size: {TYPE.small}px;"
+        )
+        relax_body.addWidget(movers_title)
+        self._movers_layout = QVBoxLayout()
+        self._movers_layout.setContentsMargins(0, 0, 0, 0)
+        self._movers_layout.setSpacing(2)
+        relax_body.addLayout(self._movers_layout)
+        self._mover_labels: list[QLabel] = []
+        self._relax_card.hide()
+        layout.addWidget(self._relax_card)
+
+        # --- magnetism -----------------------------------------------------------
+        self._mag_card = Card()
+        mag_body = self._mag_card.body()
+        mag_body.addWidget(ThemedLabel("Magnetization", "CardTitle"))
+        for key, caption in (
+            ("mag_kind", "Type"),
+            ("mag_net", "Net moment"),
+            ("mag_net_components", "Net S(x, y, z)"),
+            ("mag_total", "Σ |m| per atom"),
+            ("mag_largest", "Largest |m|"),
+        ):
+            row = InfoRow(caption)
+            self._rows[key] = row
+            mag_body.addWidget(row)
+        self._mag_card.hide()
+        layout.addWidget(self._mag_card)
 
         # --- measurement -------------------------------------------------------
         self._measure_card = Card()
@@ -220,6 +289,8 @@ class StructureInfoPanel(QWidget):
             row.set_value("—", muted=True)
         self._atom_card.hide()
         self._measure_card.hide()
+        self._relax_card.hide()
+        self._mag_card.hide()
         self._clear_files()
 
     def update_structure(
@@ -250,7 +321,23 @@ class StructureInfoPanel(QWidget):
         for key, value in (("ab", gamma), ("bc", alpha), ("ca", beta)):
             self._rows[key].set_value(f"{value:.2f}°")
 
-    def show_atom(self, structure: StructureData | None, index: int | None) -> None:
+    def show_atom(
+        self,
+        structure: StructureData | None,
+        index: int | None,
+        *,
+        wyckoff: str | None = None,
+        equivalents: list[int] | None = None,
+        moment: float | None = None,
+        spin: tuple[float, float, float] | None = None,
+        displacement: float | None = None,
+    ) -> None:
+        """The selected atom, plus whichever extras the page has for it.
+
+        Each keyword is optional and its row is shown only when given, so a
+        calculation without magnetization or without a CONTCAR simply has a
+        shorter card rather than rows of dashes.
+        """
         if structure is None or index is None or index >= structure.n_atoms:
             self._atom_card.hide()
             return
@@ -265,7 +352,97 @@ class StructureInfoPanel(QWidget):
         self._rows["atom_cart"].set_value(
             f"{cart[0]:.3f}, {cart[1]:.3f}, {cart[2]:.3f}"
         )
+
+        row = self._rows["atom_wyckoff"]
+        row.setVisible(wyckoff is not None)
+        if wyckoff is not None:
+            row.set_value(wyckoff)
+
+        row = self._rows["atom_equivalents"]
+        row.setVisible(equivalents is not None)
+        if equivalents is not None:
+            others = [i for i in equivalents if i != index]
+            if not others:
+                row.set_value("none (unique site)", muted=True)
+            else:
+                # The row wraps, so a dozen indices fit; beyond that, say how
+                # many are left rather than trailing off.
+                shown = ", ".join(str(i + 1) for i in others[:12])
+                if len(others) > 12:
+                    shown += f" and {len(others) - 12} more"
+                row.set_value(f"{len(others)} atoms: {shown}")
+
+        row = self._rows["atom_moment"]
+        row.setVisible(moment is not None)
+        if moment is not None:
+            row.set_value(f"{moment:+.3f}")
+
+        row = self._rows["atom_spin"]
+        row.setVisible(spin is not None)
+        if spin is not None:
+            row.set_value(f"{spin[0]:+.3f}, {spin[1]:+.3f}, {spin[2]:+.3f}")
+
+        row = self._rows["atom_displacement"]
+        row.setVisible(displacement is not None)
+        if displacement is not None:
+            row.set_value(f"{displacement:.4f} Å")
+
         self._atom_card.show()
+
+    def show_relaxation(self, result) -> None:
+        """``result`` is a services.relaxation.RelaxationResult, or None."""
+        for label in self._mover_labels:
+            self._movers_layout.removeWidget(label)
+            label.hide()
+            label.setParent(None)
+            label.deleteLater()
+        self._mover_labels = []
+        if result is None or result.n_atoms == 0:
+            self._relax_card.hide()
+            return
+
+        self._rows["relax_mean"].set_value(f"{result.mean_displacement:.4f} Å")
+        self._rows["relax_rms"].set_value(f"{result.rms_displacement:.4f} Å")
+        magnitudes = result.magnitudes
+        for index in result.ranked(5):
+            label = QLabel(
+                f"{result.final.species[index]} #{index + 1}"
+                f"    {magnitudes[index]:.4f} Å"
+            )
+            label.setStyleSheet(f"font-size: {TYPE.small}px; color: {PALETTE.text};")
+            self._movers_layout.addWidget(label)
+            self._mover_labels.append(label)
+        self._relax_card.show()
+
+    def show_magnetization(self, moments) -> None:
+        """``moments`` is a parsers.outcar.MagneticMoments, or None."""
+        if moments is None or moments.n_atoms == 0:
+            self._mag_card.hide()
+            return
+        largest = int(moments.magnitudes.argmax())
+        self._rows["mag_kind"].set_value(
+            "Collinear (ISPIN=2)" if moments.collinear
+            else "Non-collinear (spin-orbit)"
+        )
+        # The net moment is the vector sum; Σ|m| is the sum of magnitudes.
+        # They differ exactly where it matters: an antiferromagnet has a
+        # large Σ|m| and a net of nearly zero, and reporting only one of the
+        # two would describe it wrongly either way.
+        self._rows["mag_net"].set_value(f"{moments.net_magnitude:.3f} μB")
+        net_row = self._rows["mag_net_components"]
+        net_row.setVisible(not moments.collinear)
+        if not moments.collinear:
+            net = moments.total_vector
+            net_row.set_value(
+                f"{net[0]:+.3f}, {net[1]:+.3f}, {net[2]:+.3f}"
+            )
+        self._rows["mag_total"].set_value(
+            f"{float(moments.magnitudes.sum()):.3f} μB"
+        )
+        self._rows["mag_largest"].set_value(
+            f"{moments.magnitudes[largest]:.3f} μB  (atom {largest + 1})"
+        )
+        self._mag_card.show()
 
     def show_measurement(self, measurement) -> None:
         if measurement is None:

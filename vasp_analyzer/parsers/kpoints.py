@@ -91,6 +91,15 @@ def parse_kpoints(path: Path) -> ParseResult[KpointsSpec]:
                 if marker in body:
                     label = _pretty_label(body.split(marker, 1)[1])
                     break
+            else:
+                # VASPKIT writes the label bare after the three coordinates,
+                # with no comment marker at all:
+                #     0.0000  0.0000 -0.5000    -Z
+                # Without this the whole path comes back unlabelled and the
+                # axis falls back to "Wave vector (Å⁻¹)" — which is exactly
+                # what a VASPKIT-generated band structure was showing.
+                if len(parts) > 3:
+                    label = _pretty_label(parts[3])
             spec.path_coords.append((numbers[0], numbers[1], numbers[2]))
             spec.path_labels.append(label)
         log.info("Parsed KPOINTS: line mode, %d path points", len(spec.path_coords))

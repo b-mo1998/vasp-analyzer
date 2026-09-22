@@ -57,6 +57,21 @@ class ToggleSwitch(QAbstractButton):
         self._animation.setEndValue(1.0 if checked else 0.0)
         self._animation.start()
 
+    def set_state(self, checked: bool) -> None:
+        """Set the switch without animating or emitting ``toggled``.
+
+        Used by read-only indicators that report a calculation's setting.
+        Blocking signals around ``setChecked`` is not enough on its own: the
+        knob position is driven by the animation that ``toggled`` starts, so a
+        blocked signal leaves a checked switch still painted in its off
+        position.
+        """
+        self._animation.stop()
+        self.blockSignals(True)
+        self.setChecked(checked)
+        self.blockSignals(False)
+        self._set_offset(1.0 if checked else 0.0)
+
     # -- painting ----------------------------------------------------------
 
     def sizeHint(self) -> QSize:  # noqa: N802 - Qt naming

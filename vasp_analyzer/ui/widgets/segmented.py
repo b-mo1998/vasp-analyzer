@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QButtonGroup, QHBoxLayout, QPushButton, QWidget
 
 
@@ -19,6 +19,12 @@ class SegmentedControl(QWidget):
     def __init__(self, items: list[str], parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("SegmentedControl")
+        # A plain QWidget does not paint its stylesheet background unless
+        # told to — without this, the pill has no visible surface when it
+        # floats over a dark viewer canvas (MD/NEB/Charge), and the
+        # unchecked segment's text becomes illegible against whatever is
+        # behind it.
+        self.setAttribute(Qt.WA_StyledBackground, True)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(3, 3, 3, 3)
         layout.setSpacing(3)

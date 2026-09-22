@@ -23,17 +23,22 @@ from ....models.calculation import Calculation
 from ....models.capabilities import Capability
 from ....models.dos import DosData
 from ....parsers.procar import ProcarData
+from ....parsers.wannier import WannierBands
+from ....services.atom_selector import parse_atom_selector
 from ....services.loader import (
     DATASET_BANDS,
     DATASET_DOS,
     DATASET_PROCAR,
     DATASET_STRUCTURE,
+    DATASET_WANNIER_BANDS,
     DataLoader,
 )
 from ...theme import METRICS, PALETTE, SPACING, TYPE
+from ...widgets.colorbar import DivergingColorbar
 from ...widgets.empty_state import EmptyState
 from ...widgets.legend import PlotLegend
 from ...widgets.notice import Notice
+from ...widgets.popout import PopoutButton
 from ...widgets.primitives import Card
 from ...widgets.slider_row import SliderRow
 from ...widgets.toggle import LabelledToggle
@@ -48,8 +53,18 @@ from .export import (
     save_dos_csv,
     save_dos_figure,
     save_figure,
+    save_paper_figure,
 )
-from .projection import build_element_overlay, legend_elements
+from .projection import (
+    ATOM_PROJECTION_COLOR,
+    AXIS_LABELS,
+    build_atom_overlay,
+    build_element_overlay,
+    build_orbital_overlay,
+    build_spin_overlay,
+    legend_elements,
+    legend_orbitals,
+)
 from .sidebar import BandsSidebar
 
 log = get_logger("ui.bands")
@@ -76,8 +91,13 @@ class BandsPage(Page):
         self._dos: DosData | None = None
         self._procar: ProcarData | None = None
         self._species: list[str] | None = None
-        self._selected_orbital: str | None = None
+        self._orbital_selection: dict[str, list[str]] | None = None
         self._element_projection_requested = False
+        self._wannier_bands: WannierBands | None = None
+        self._wannier_projection_requested = False
+        self._spin_projection_requested = False
+        self._atom_projection_requested = False
+        self._spin_axis = 2
         self._dos_visible = True
         self._auto_xmax = True
 
@@ -138,8 +158,21 @@ class BandsPage(Page):
         header_row.addWidget(self._dos_toggle, 0, Qt.AlignVCenter)
         body.addWidget(header)
 
+        plot_row = QHBoxLayout()
+        plot_row.setContentsMargins(0, 0, 0, 0)
+        plot_row.setSpacing(SPACING.sm)
+
         self._band_plot = BandPlot()
-        body.addWidget(self._band_plot, 1)
+        header_row.addWidget(
+            PopoutButton(self._band_plot, "Band Structure", flat=True), 0, Qt.AlignVCenter
+        )
+        plot_row.addWidget(self._band_plot, 1)
+
+        self._spin_colorbar = DivergingColorbar()
+        self._spin_colorbar.setVisible(False)
+        plot_row.addWidget(self._spin_colorbar, 0)
+
+        body.addLayout(plot_row, 1)
         self._band_card = card
         return card
 
@@ -155,12 +188,15 @@ class BandsPage(Page):
         header_layout.setContentsMargins(0, 0, 0, 0)
         header_layout.setSpacing(SPACING.xs)
 
+        caption_row = QHBoxLayout()
+        caption_row.setContentsMargins(0, 0, 0, 0)
         caption = QLabel("X Max (states/eV)")
         caption.setAlignment(Qt.AlignCenter)
         caption.setStyleSheet(
             f"font-size: {TYPE.small}px; color: {PALETTE.text_secondary};"
         )
-        header_layout.addWidget(caption)
+        caption_row.addWidget(caption, 1)
+        header_layout.addLayout(caption_row)
 
         self._xmax = SliderRow("", 0.0, 16.0, 8.0, 0.1, "", decimals=2, inline=True)
         header_layout.addWidget(self._xmax)
@@ -168,6 +204,7 @@ class BandsPage(Page):
         body.addWidget(header)
 
         self._dos_plot = DosPlot()
+        caption_row.addWidget(PopoutButton(self._dos_plot, "Density of States", flat=True))
         body.addWidget(self._dos_plot, 1)
         self._dos_card = card
         return card
@@ -179,7 +216,11 @@ class BandsPage(Page):
         side.fermiChanged.connect(self._on_reference_changed)
         side.dosToggled.connect(self._set_dos_visible)
         side.projectionToggled.connect(self._on_projection_toggled)
-        side.orbitalChanged.connect(self._on_orbital_changed)
+        side.orbitalsChanged.connect(self._on_orbitals_changed)
+        side.spinAxisChanged.connect(self._on_spin_axis_changed)
+        side.atomProjectionChanged.connect(self._try_build_atom_projection)
+        side.bandGapMarkersToggled.connect(self._band_plot.set_band_gap_visible)
+        side.hoverInfoToggled.connect(self._band_plot.set_hover_enabled)
 
         self._dos_toggle.toggled.connect(self._set_dos_visible)
         self._xmax.valueChanged.connect(self._on_xmax_changed)
@@ -196,15 +237,27 @@ class BandsPage(Page):
         self._dos = None
         self._procar = None
         self._species = None
-        self._selected_orbital = None
+        self._orbital_selection = None
         self._element_projection_requested = False
+        self._wannier_bands = None
+        self._wannier_projection_requested = False
+        self._spin_projection_requested = False
+        self._atom_projection_requested = False
         self._auto_xmax = True
         self._notice.clear()
         self._band_plot.set_bands(None)
         self._band_plot.set_projection(None)
+        self._band_plot.set_wannier(None, None)
+        self._band_plot.set_band_gap(None)
+        self._band_plot.set_orbital_source(None, None)
         self._dos_plot.set_dos(None)
         self._legend.remove_entries_with_prefix("element:")
+        self._legend.remove_entries_with_prefix("orbital:")
+        self._legend.set_entry_visible("wannier", False)
+        self._spin_colorbar.setVisible(False)
         self._sidebar.projections["element"].setChecked(False)
+        self._sidebar.projections["wannier"].setChecked(False)
+        self._sidebar.projections["spin"].setChecked(False)
         self._sidebar.clear_orbitals()
         self.gapComputed.emit("—", "")
 
@@ -279,15 +332,15 @@ class BandsPage(Page):
         for key, capability in (
             ("spin", Capability.SPIN_PROJECTION),
             ("element", Capability.ELEMENT_PROJECTION),
+            # Same prerequisite as Element: a PROCAR matching the loaded
+            # bands — atom projection reads the identical per-ion weights,
+            # just restricted to specific rows instead of a species.
+            ("atom", Capability.ELEMENT_PROJECTION),
             ("wannier", Capability.WANNIER_BANDS),
         ):
             side.set_projection_enabled(
                 key, calculation.can(capability), calculation.why_not(capability)
             )
-
-        self._legend.set_entry_visible(
-            "wannier", calculation.can(Capability.WANNIER_BANDS)
-        )
 
         for issue in calculation.issues:
             if issue.severity in (Severity.WARNING, Severity.ERROR):
@@ -319,6 +372,8 @@ class BandsPage(Page):
             self._apply_procar(result)
         elif dataset == DATASET_STRUCTURE:
             self._apply_species(result)
+        elif dataset == DATASET_WANNIER_BANDS:
+            self._apply_wannier_bands(result)
 
     def _apply_bands(self, result: ParseResult) -> None:
         for issue in result.issues:
@@ -335,7 +390,8 @@ class BandsPage(Page):
         self._stack.setCurrentIndex(0)
         self._band_plot.set_bands(self._bands)
         self._on_limits_changed()
-        self._try_build_projection()
+        self._try_build_element_projection()
+        self._try_build_spin_projection()
         self._update_gap_display()
 
     def _update_gap_display(self) -> None:
@@ -350,6 +406,7 @@ class BandsPage(Page):
                 "A band gap needs both EIGENVAL and a determined Fermi level "
                 "(from DOSCAR, OUTCAR or vasprun.xml).",
             )
+            self._band_plot.set_band_gap(None)
             return
 
         e_fermi = calculation.metadata.e_fermi
@@ -360,6 +417,7 @@ class BandsPage(Page):
                 f"No band gap at E_F = {e_fermi.value:.4f} eV ({e_fermi.source}): "
                 "the valence and conduction states overlap there.",
             )
+            self._band_plot.set_band_gap(None)
             return
 
         kind = "direct" if gap.is_direct else "indirect"
@@ -368,6 +426,12 @@ class BandsPage(Page):
             f"VBM {gap.vbm:.4f} eV, CBM {gap.cbm:.4f} eV, relative to "
             f"E_F = {e_fermi.value:.4f} eV ({e_fermi.source}).",
         )
+        # Plotted at the *absolute* VBM/CBM energies (matching the gap's own
+        # eV values above), and BandPlot subtracts its own reference the same
+        # way it does for every band line — so the markers stay correctly
+        # placed as the user drags the Fermi/reference control, not fixed to
+        # wherever E_F happened to be when the gap was computed.
+        self._band_plot.set_band_gap(gap)
 
     def _apply_dos(self, result: ParseResult) -> None:
         if not result.ok:
@@ -437,27 +501,22 @@ class BandsPage(Page):
         if key == "element":
             self._set_element_projection(checked)
             return
-
-        # Spin and Wannier projections aren't implemented yet; the checkboxes
-        # exist and correctly respect capability state, but nothing is drawn
-        # until each data path lands.
-        log.info("Projection %s toggled -> %s (not yet implemented)", key, checked)
-        if checked:
-            self._notice.show_issue(
-                Issue(
-                    code="projection_not_implemented",
-                    message=f"{key.title()} projection is not implemented yet.",
-                    severity=Severity.INFO,
-                )
-            )
-        else:
-            self._notice.clear()
+        if key == "wannier":
+            self._set_wannier_projection(checked)
+            return
+        if key == "spin":
+            self._set_spin_projection(checked)
+            return
+        if key == "atom":
+            self._set_atom_projection(checked)
+            return
 
     def _set_element_projection(self, checked: bool) -> None:
         if not checked:
             self._element_projection_requested = False
             self._band_plot.set_projection(None)
             self._legend.remove_entries_with_prefix("element:")
+            self._legend.remove_entries_with_prefix("orbital:")
             return
 
         calculation = self.calculation()
@@ -465,43 +524,208 @@ class BandsPage(Page):
             return
 
         self._element_projection_requested = True
-        self._loader.request(DATASET_PROCAR)
+        # request() returns None exactly when it had to start a background
+        # load rather than deliver an already-cached result — that's the
+        # signal to show the indicator; a cached PROCAR (already used for
+        # spin projection, say) delivers through data_ready synchronously
+        # below and never leaves anything "loading" to show.
+        if self._loader.request(DATASET_PROCAR) is None:
+            self._sidebar.set_projection_loading(True)
         self._loader.request(DATASET_STRUCTURE)
-        self._try_build_projection()
+        self._try_build_element_projection()
+
+    def _set_spin_projection(self, checked: bool) -> None:
+        if not checked:
+            self._spin_projection_requested = False
+            self._band_plot.set_projection(None)
+            self._spin_colorbar.setVisible(False)
+            return
+
+        calculation = self.calculation()
+        if calculation is None or not calculation.can(Capability.SPIN_PROJECTION):
+            return
+
+        self._spin_projection_requested = True
+        if self._loader.request(DATASET_PROCAR) is None:
+            self._sidebar.set_projection_loading(True)
+        self._try_build_spin_projection()
+
+    def _on_spin_axis_changed(self, axis: int) -> None:
+        self._spin_axis = axis
+        self._try_build_spin_projection()
+
+    def _set_atom_projection(self, checked: bool) -> None:
+        if not checked:
+            self._atom_projection_requested = False
+            self._band_plot.set_projection(None)
+            self._legend.remove_entries_with_prefix("atom:")
+            self._sidebar.set_atom_status("")
+            return
+
+        calculation = self.calculation()
+        if calculation is None or not calculation.can(Capability.ELEMENT_PROJECTION):
+            return
+
+        self._atom_projection_requested = True
+        if self._loader.request(DATASET_PROCAR) is None:
+            self._sidebar.set_projection_loading(True)
+        self._loader.request(DATASET_STRUCTURE)
+        self._try_build_atom_projection()
+
+    def _try_build_spin_projection(self) -> None:
+        if not self._spin_projection_requested:
+            return
+        if self._bands is None or self._procar is None:
+            return
+
+        # Fixed to the physical range of a single electron's spin expectation
+        # value (+-1/2), not auto-scaled to whatever this calculation's data
+        # happens to span — a fixed scale is what makes the colour comparable
+        # across different calculations and axis choices.
+        result = build_spin_overlay(self._bands, self._procar, axis=self._spin_axis, vmax=0.5)
+        if result is None:
+            self._notice.show_issue(
+                Issue(
+                    code="spin_projection_unavailable",
+                    message=(
+                        "PROCAR doesn't carry usable spin data for this "
+                        "calculation, or its dimensions don't match EIGENVAL."
+                    ),
+                    severity=Severity.WARNING,
+                )
+            )
+            self._sidebar.projections["spin"].setChecked(False)
+            return
+
+        overlay, _vmax = result
+        axis_label = AXIS_LABELS[self._spin_axis] if self._procar.is_noncollinear else "up-down"
+        self._band_plot.set_projection(overlay)
+        self._legend.remove_entries_with_prefix("element:")
+        self._legend.remove_entries_with_prefix("orbital:")
+        self._spin_colorbar.set_label(f"Spin ({axis_label})")
+        self._spin_colorbar.setVisible(True)
+
+    def _set_wannier_projection(self, checked: bool) -> None:
+        if not checked:
+            self._wannier_projection_requested = False
+            self._band_plot.set_wannier(None, None)
+            self._legend.set_entry_visible("wannier", False)
+            return
+
+        calculation = self.calculation()
+        if calculation is None or not calculation.can(Capability.WANNIER_BANDS):
+            return
+
+        self._wannier_projection_requested = True
+        self._loader.request(DATASET_WANNIER_BANDS)
+        self._apply_wannier_overlay()
+
+    def _apply_wannier_bands(self, result: ParseResult) -> None:
+        if not result.ok:
+            for issue in result.issues:
+                self._notice.show_issue(issue)
+                break
+            self._sidebar.projections["wannier"].setChecked(False)
+            return
+        self._wannier_bands = result.value
+        for issue in result.issues:
+            if issue.severity in (Severity.WARNING, Severity.ERROR):
+                self._notice.show_issue(issue)
+                break
+        self._apply_wannier_overlay()
+
+    def _apply_wannier_overlay(self) -> None:
+        if not self._wannier_projection_requested or self._wannier_bands is None:
+            return
+        self._band_plot.set_wannier(self._wannier_bands.x, self._wannier_bands.energies)
+        self._legend.set_entry_visible("wannier", True)
 
     def _apply_procar(self, result: ParseResult) -> None:
+        self._sidebar.set_projection_loading(False)
         if not result.ok:
             for issue in result.issues:
                 self._notice.show_issue(issue)
                 break
             self._sidebar.projections["element"].setChecked(False)
+            self._sidebar.projections["spin"].setChecked(False)
+            self._sidebar.projections["atom"].setChecked(False)
             return
         self._procar = result.value
-        self._sidebar.set_orbitals(self._procar.orbitals)
+        self._band_plot.set_orbital_source(self._procar, self._species)
+        self._refresh_orbital_matrix()
         for issue in result.issues:
             if issue.severity in (Severity.WARNING, Severity.ERROR):
                 self._notice.show_issue(issue)
                 break
-        self._try_build_projection()
+        self._try_build_element_projection()
+        self._try_build_spin_projection()
+        self._try_build_atom_projection()
 
     def _apply_species(self, result: ParseResult) -> None:
         if result.ok and result.value is not None:
             self._species = list(result.value.species)
-            self._try_build_projection()
+            self._band_plot.set_orbital_source(self._procar, self._species)
+            self._refresh_orbital_matrix()
+            self._try_build_element_projection()
+            self._try_build_atom_projection()
 
-    def _on_orbital_changed(self, orbital: str | None) -> None:
-        self._selected_orbital = orbital
-        self._try_build_projection()
+    def _refresh_orbital_matrix(self) -> None:
+        """The matrix needs both PROCAR's orbital columns and the structure's
+        element list, which arrive from two independent loads."""
+        if self._procar is None or self._species is None:
+            return
+        elements: list[str] = []
+        for symbol in self._species:
+            if symbol not in elements:
+                elements.append(symbol)
+        self._sidebar.set_orbitals(self._procar.orbitals, elements)
 
-    def _try_build_projection(self) -> None:
+    def _on_orbitals_changed(self, selection: dict) -> None:
+        self._orbital_selection = dict(selection)
+        self._try_build_element_projection()
+
+    def _try_build_element_projection(self) -> None:
         if not self._element_projection_requested:
             return
         if self._bands is None or self._procar is None or self._species is None:
             return
 
-        overlay = build_element_overlay(
-            self._bands, self._procar, self._species, orbital=self._selected_orbital
+        selection = self._orbital_selection
+        full = self._sidebar.orbital_selection_is_full()
+
+        if selection is not None and not selection:
+            # Every chip is off: nothing contributes, so show nothing rather
+            # than an overlay that implies a result.
+            self._band_plot.set_projection(None)
+            self._legend.remove_entries_with_prefix("element:")
+            self._legend.remove_entries_with_prefix("orbital:")
+            return
+
+        # A single-element cell has a flat by-element view — every point is
+        # the same colour — so a partial selection there is far more useful
+        # coloured by orbital. With more than one element present, keeping
+        # the element colours is what makes a per-element comparison legible.
+        distinct = len(set(self._species))
+        by_orbital = (
+            not full and selection is not None and distinct <= 1
         )
+        selected = (
+            sorted({o for orbitals in selection.values() for o in orbitals})
+            if selection
+            else None
+        )
+
+        if by_orbital:
+            ordered = [o for o in self._procar.orbitals if o in set(selected or [])]
+            overlay = build_orbital_overlay(self._bands, self._procar, ordered)
+            selected = ordered
+        else:
+            overlay = build_element_overlay(
+                self._bands,
+                self._procar,
+                self._species,
+                orbitals_by_element=None if full else selection,
+            )
         if overlay is None:
             self._notice.show_issue(
                 Issue(
@@ -518,8 +742,78 @@ class BandsPage(Page):
 
         self._band_plot.set_projection(overlay)
         self._legend.remove_entries_with_prefix("element:")
-        for element, color in legend_elements(self._species):
-            self._legend.add_dot_entry(f"element:{element}", element, color)
+        self._legend.remove_entries_with_prefix("orbital:")
+        if by_orbital:
+            for orbital, color in legend_orbitals(selected):
+                self._legend.add_dot_entry(f"orbital:{orbital}", orbital, color)
+        else:
+            for element, color in legend_elements(self._species):
+                self._legend.add_dot_entry(f"element:{element}", element, color)
+
+    def _try_build_atom_projection(self) -> None:
+        if not self._atom_projection_requested:
+            return
+        if self._bands is None or self._procar is None or self._species is None:
+            return
+
+        # The orbital chips need PROCAR's own orbital list, which isn't
+        # known until PROCAR itself has arrived — the same moment this can
+        # first run at all, so populating here rather than in _apply_procar
+        # keeps "where the chips get their orbitals from" in one place.
+        if not self._sidebar.atom_orbitals.has_orbitals():
+            self._sidebar.set_atom_orbitals(self._procar.orbitals)
+
+        text = self._sidebar.atom_selector_text()
+        selection = parse_atom_selector(text, self._species)
+        orbital_selection = self._sidebar.atom_orbital_selection()
+        full_orbitals = self._sidebar.atom_orbitals.is_full_selection()
+
+        if selection.is_empty or not orbital_selection:
+            self._band_plot.set_projection(None)
+            self._legend.remove_entries_with_prefix("atom:")
+            if not text.strip():
+                self._sidebar.set_atom_status("")
+            elif selection.invalid_tokens:
+                self._sidebar.set_atom_status(
+                    f"Not recognized: {', '.join(selection.invalid_tokens)}"
+                )
+            elif selection.is_empty:
+                self._sidebar.set_atom_status("No atoms matched")
+            else:
+                self._sidebar.set_atom_status("No orbitals selected")
+            return
+
+        rows = sorted(selection.rows)
+        orbitals = None if full_orbitals else orbital_selection
+        overlay = build_atom_overlay(self._bands, self._procar, rows, orbitals)
+        if overlay is None:
+            self._notice.show_issue(
+                Issue(
+                    code="procar_mismatched_dimensions",
+                    message=(
+                        "PROCAR's k-points or bands don't match EIGENVAL, so "
+                        "atom projection can't be shown."
+                    ),
+                    severity=Severity.WARNING,
+                )
+            )
+            self._sidebar.projections["atom"].setChecked(False)
+            return
+
+        self._band_plot.set_projection(overlay)
+        self._legend.remove_entries_with_prefix("atom:")
+        count = len(rows)
+        label = f"Atom{'s' if count != 1 else ''} " + ", ".join(
+            str(r + 1) for r in rows[:6]
+        )
+        if count > 6:
+            label += f" (+{count - 6})"
+        self._legend.add_dot_entry("atom:selection", label, ATOM_PROJECTION_COLOR)
+
+        status = f"{count} atom{'s' if count != 1 else ''} selected"
+        if selection.invalid_tokens:
+            status += f" — not recognized: {', '.join(selection.invalid_tokens)}"
+        self._sidebar.set_atom_status(status)
 
     def _show_unavailable(self, title: str, message: str) -> None:
         self._empty.set_text(title, message)
@@ -538,7 +832,7 @@ class BandsPage(Page):
             y_max=high,
             dos_xmax=self._xmax.value(),
             include_dos=self._dos_visible and self._dos is not None,
-            title=calculation.directory.name if calculation is not None else "",
+            title=calculation.name if calculation is not None else "",
         )
 
     def copy_to_clipboard(self) -> bool:
@@ -566,12 +860,13 @@ class BandsPage(Page):
         if self._bands is None and self._dos is None:
             return
         calculation = self.calculation()
-        stem = calculation.directory.name if calculation is not None else "bands"
+        stem = calculation.name if calculation is not None else "bands"
         suggested = str(Path.home() / f"{stem}-bands.png")
 
         filters = (
             "PNG image (*.png);;SVG vector (*.svg);;PDF document (*.pdf);;"
-            "DOS image (*.png);;Band data (*.csv);;DOS data (*.csv)"
+            "DOS image (*.png);;Band data (*.csv);;DOS data (*.csv);;"
+            "Paper figure — single column (*.pdf);;Paper figure — single column (*.svg)"
         )
         path_text, selected = QFileDialog.getSaveFileName(
             self, "Export Bands", suggested, filters
@@ -615,6 +910,17 @@ class BandsPage(Page):
                     )
                     return
                 save_dos_figure(request, path)
+            elif selected.startswith("Paper figure"):
+                if request.bands is None:
+                    self._notice.show_issue(
+                        Issue(
+                            code="band_export_unavailable",
+                            message="There is no band data to export.",
+                            severity=Severity.INFO,
+                        )
+                    )
+                    return
+                save_paper_figure(request, path)
             elif request.bands is not None:
                 save_figure(request, path)
             else:

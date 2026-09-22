@@ -17,6 +17,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "pytest-qt>=4.4"]
 materials-project = ["mp-api>=0.45", "keyring>=25.0"]
+build = ["pyinstaller>=6.0"]
 
 [project.gui-scripts]
 vasp-analyzer = "vasp_analyzer.__main__:main"

@@ -35,9 +35,14 @@ from ..parsers.incar import (
 )
 from ..parsers.kpoints import parse_kpoints
 from ..parsers.outcar import parse_outcar
+from ..parsers.oszicar import peek_oszicar_steps
 from ..parsers.poscar import parse_poscar
 from ..parsers.wannier import parse_win
+from ..parsers.xdatcar import peek_xdatcar_frames
+from .layout import ProjectLayout, resolve_layout
+from .neb import find_image_directories, looks_like_neb
 from .validation import validate_consistency
+from .volumetric import VolumetricSource, find_volumetric_sources
 
 log = get_logger("services.discovery")
 
@@ -110,7 +115,51 @@ def scan_directory(directory: Path) -> FileIndex:
     return index
 
 
-def _collect_metadata(index: FileIndex, issues: list[Issue]) -> tuple[CalculationMetadata, dict]:
+def scan_file(path: Path) -> FileIndex:
+    """Index a single file as if it were the only thing in its directory.
+
+    Dropping one POSCAR or one CHGCAR onto the window is a real thing users
+    do, and it must not quietly pull in the rest of whatever folder that file
+    happens to live in — a CHGCAR sitting beside an unrelated EIGENVAL would
+    otherwise light up the Bands page with a different calculation's data.
+    Restricting the index to the dropped file makes every downstream
+    capability check answer honestly on its own.
+    """
+    path = Path(path)
+    prefix = _detect_wannier_prefix([path.name])
+    index = FileIndex(directory=path.parent, wannier_prefix=prefix)
+    matched = False
+
+    for role in ALL_ROLES:
+        entry = FileEntry(role=role)
+        if not matched and _match_role_filename(path.name, role.filename, prefix):
+            try:
+                stat = path.stat()
+                entry.path = path
+                entry.size = stat.st_size
+                entry.mtime = stat.st_mtime
+                if stat.st_size < _MIN_USEFUL_BYTES:
+                    entry.status = FileStatus.MALFORMED
+                    entry.note = "File is empty."
+                else:
+                    entry.status = FileStatus.FOUND
+                matched = True
+            except OSError as exc:
+                entry.status = FileStatus.UNREADABLE
+                entry.note = "File could not be read."
+                log.warning("Cannot stat %s: %s", path, exc)
+                matched = True
+        index.entries[role.key] = entry
+
+    index.unrecognised = [] if matched else [path.name]
+    return index
+
+
+def _collect_metadata(
+    index: FileIndex,
+    issues: list[Issue],
+    volumetric_sources: list | None = None,
+) -> tuple[CalculationMetadata, dict]:
     """Parse the small input files and assemble metadata with provenance."""
     metadata = CalculationMetadata()
     context: dict = {}
@@ -218,7 +267,69 @@ def _collect_metadata(index: FileIndex, issues: list[Issue]) -> tuple[Calculatio
         if result.ok:
             context["wannier"] = result.value
 
+    # --- volumetric sources -------------------------------------------------
+    # Only names and sizes are inspected. A CHGCAR can be hundreds of
+    # megabytes; the Charge Density page reads it in the background when asked.
+    sources = (
+        find_volumetric_sources(index.directory)
+        if volumetric_sources is None
+        else list(volumetric_sources)
+    )
+    context["volumetric_sources"] = sources
+
+    # A volumetric file opens with a complete POSCAR block, so a calculation
+    # that has a CHGCAR but no POSCAR or CONTCAR still knows its own
+    # structure — and the Structure and Editor pages have something real to
+    # show instead of an empty state that is not actually true. Only ever a
+    # fallback: an explicit POSCAR/CONTCAR is the authoritative statement of
+    # the geometry and is never overridden by a density file's copy of it.
+    if context.get("structure") is None and sources:
+        from ..parsers.chgcar import peek_volumetric_structure  # noqa: PLC0415
+
+        source_path = sources[0].path
+        peeked = peek_volumetric_structure(source_path)
+        if peeked is not None:
+            context["structure"] = peeked
+            provenance = Provenance(source_path.name)
+            metadata.formula = Sourced(peeked.formula, provenance)
+            if metadata.system is None and peeked.comment:
+                metadata.system = Sourced(peeked.comment, provenance)
+
     return metadata, context
+
+
+def _collect_md_context(md_root: Path) -> dict:
+    """Scan the resolved MD root independently of the electronic-structure
+    index — a project layout can point it at an entirely different directory.
+
+    Only counts are taken here. Reading the coordinates of a multi-gigabyte
+    XDATCAR at scan time would defeat the point of a cheap discovery pass;
+    the loader reads them in the background when the MD page asks.
+    """
+    context: dict = {}
+    md_index = scan_directory(md_root)
+    context["md_index"] = md_index
+
+    xdatcar_path = md_index.path_for("xdatcar")
+    if xdatcar_path:
+        context["xdatcar_frames"] = peek_xdatcar_frames(xdatcar_path)
+    oszicar_path = md_index.path_for("oszicar")
+    if oszicar_path:
+        context["oszicar_steps"] = peek_oszicar_steps(oszicar_path)
+    return context
+
+
+def _collect_neb_context(neb_root: Path) -> dict:
+    """Scan the resolved NEB root independently of the electronic-structure
+    index, for the same reason as :func:`_collect_md_context`."""
+    context: dict = {"neb_index": scan_directory(neb_root)}
+    if looks_like_neb(neb_root):
+        folders = find_image_directories(neb_root)
+        context["neb_images"] = folders
+        context["neb_has_output"] = any(
+            (path / "OUTCAR").is_file() for _, path in folders
+        ) or (neb_root / "nebef.dat").is_file()
+    return context
 
 
 def _apply_outcar_metadata(
@@ -344,6 +455,72 @@ def _determine_capabilities(
             Capability.WANNIER_BANDS, "No Wannier90 files were found in this directory."
         )
 
+    # Molecular dynamics --------------------------------------------------
+    # A trajectory needs at least two configurations: a single-frame XDATCAR is
+    # what a static or one-shot run leaves behind, and there is nothing to
+    # animate there. Read from the MD-specific index — a project layout can
+    # point it at a different directory than `index`/`directory` above.
+    md_index = context.get("md_index") or index
+    xdatcar = md_index.entries.get("xdatcar")
+    n_frames = context.get("xdatcar_frames")
+    if xdatcar and xdatcar.usable and n_frames and n_frames >= 2:
+        caps.enable(Capability.MD_TRAJECTORY)
+    elif xdatcar and xdatcar.exists and n_frames == 1:
+        caps.disable(
+            Capability.MD_TRAJECTORY,
+            "XDATCAR holds a single configuration, so there is no trajectory "
+            "to play.",
+        )
+    elif xdatcar and xdatcar.exists:
+        caps.disable(
+            Capability.MD_TRAJECTORY, "XDATCAR was found but contains no configurations."
+        )
+    else:
+        caps.disable(
+            Capability.MD_TRAJECTORY, "No XDATCAR was found in this calculation."
+        )
+
+    # Temperature and energies come from OSZICAR's per-ionic-step lines.
+    oszicar_steps = context.get("oszicar_steps")
+    caps.set(
+        Capability.MD_THERMODYNAMICS,
+        caps.has(Capability.MD_TRAJECTORY) and bool(oszicar_steps),
+        (
+            "No OSZICAR was found, so temperature and energy histories are "
+            "unavailable."
+            if not oszicar_steps
+            else "This calculation has no trajectory to plot against."
+        ),
+    )
+
+    # NEB -------------------------------------------------------------------
+    neb_images = context.get("neb_images") or []
+    if neb_images:
+        caps.enable(Capability.NEB_PATH)
+        caps.set(
+            Capability.NEB_ENERGIES,
+            bool(context.get("neb_has_output")),
+            "No image folder contains an OUTCAR, so no energies can be read.",
+        )
+    else:
+        reason = (
+            "This directory does not contain numbered NEB image folders "
+            "(00, 01, 02, …)."
+        )
+        caps.disable(Capability.NEB_PATH, reason)
+        caps.disable(Capability.NEB_ENERGIES, reason)
+
+    # Charge density / volumetric ------------------------------------------
+    sources = context.get("volumetric_sources") or []
+    if sources:
+        caps.enable(Capability.CHARGE_DENSITY)
+    else:
+        caps.disable(
+            Capability.CHARGE_DENSITY,
+            "No volumetric file (CHGCAR, CHG, PARCHG or ELFCAR) was found in "
+            "this calculation.",
+        )
+
     # Inputs / metadata ---------------------------------------------------
     caps.set(
         Capability.INPUT_FILES,
@@ -359,26 +536,31 @@ def _determine_capabilities(
 
 
 def discover(directory: Path) -> Calculation:
-    """Scan a directory and produce a fully described :class:`Calculation`."""
+    """Scan a directory and produce a fully described :class:`Calculation`.
+
+    ``directory`` may itself be a flat calculation directory, or a project
+    folder organised into ``band``/``md``/``neb`` subdirectories — see
+    :mod:`services.layout`. Either way, exactly one :class:`Calculation`
+    comes back, with each page family already pointed at the right place.
+    """
     directory = Path(directory)
+    if not directory.exists():
+        return _discover_missing(directory)
+    return discover_with_layout(directory, resolve_layout(directory))
+
+
+def discover_with_layout(opened_directory: Path, layout: ProjectLayout) -> Calculation:
+    """Like :func:`discover`, but with an already-resolved layout.
+
+    Used to attach a single new sub-root — an md/neb/band folder dropped onto
+    an already-open project — without re-deriving the other two roots from
+    scratch, so the rest of the project keeps reading from exactly where it
+    was.
+    """
+    opened_directory = Path(opened_directory)
     issues: list[Issue] = []
 
-    if not directory.exists():
-        index = FileIndex(directory=directory)
-        calculation = Calculation(directory=directory, index=index)
-        calculation.issues.append(
-            Issue(
-                code="directory_missing",
-                message="That folder no longer exists.",
-                severity=Severity.ERROR,
-            )
-        )
-        calculation.capabilities = _determine_capabilities(
-            index, {}, validate_consistency(index, {}, [])
-        )
-        return calculation
-
-    index = scan_directory(directory)
+    index = scan_directory(layout.electronic)
     metadata, context = _collect_metadata(index, issues)
     consistency = validate_consistency(index, context, issues)
     _apply_outcar_metadata(metadata, context, consistency.outcar_trusted)
@@ -390,18 +572,132 @@ def discover(directory: Path) -> Calculation:
     if fermi is not None:
         metadata.e_fermi = fermi
 
+    context.update(_collect_md_context(layout.md))
+    context.update(_collect_neb_context(layout.neb))
+
     capabilities = _determine_capabilities(index, context, consistency)
 
     calculation = Calculation(
-        directory=directory,
+        directory=layout.electronic,
         index=index,
         capabilities=capabilities,
         metadata=metadata,
         issues=issues,
+        opened_directory=(
+            opened_directory if opened_directory != layout.electronic else None
+        ),
+        md_directory=layout.md,
+        md_index=context.get("md_index"),
+        neb_directory=layout.neb,
+        neb_index=context.get("neb_index"),
+        volumetric_sources=context.get("volumetric_sources") or [],
     )
     log.info(
         "Capabilities for %s: %s",
-        directory.name,
+        opened_directory.name,
         ", ".join(sorted(c.value for c in capabilities.available)) or "none",
+    )
+    if not layout.is_flat:
+        log.info(
+            "Project layout: band=%s md=%s neb=%s",
+            layout.electronic, layout.md, layout.neb,
+        )
+    return calculation
+
+
+def discover_file(path: Path) -> Calculation:
+    """Describe a single dropped file as a (very small) calculation.
+
+    The point is that dropping a lone POSCAR or CHGCAR does something sensible
+    instead of nothing: the pages that file can actually feed come up with
+    real data, and every other page shows its ordinary "not found" empty state
+    naming what is missing. That fallout is automatic — the pages already bind
+    to capabilities rather than to filenames, so an index holding one file
+    produces exactly the right set of enabled pages with no per-page special
+    casing anywhere.
+
+    Nothing else in the containing folder is read. See :func:`scan_file`.
+    """
+    from ..parsers.chgcar import kind_for_filename  # noqa: PLC0415 - avoids a cycle
+
+    path = Path(path)
+    if not path.is_file():
+        return _discover_missing(path)
+
+    issues: list[Issue] = []
+    index = scan_file(path)
+
+    # Recognised by name rather than by looking it up in the index, so a
+    # PARCHG (which has no file role of its own, because its name varies with
+    # the bands and k-points it holds) still opens the Charge Density page.
+    sources: list[VolumetricSource] = []
+    if path.name.upper().startswith(("CHGCAR", "CHG", "ELFCAR", "LOCPOT", "PARCHG")):
+        sources = [VolumetricSource(path=path, kind=kind_for_filename(path.name))]
+
+    metadata, context = _collect_metadata(index, issues, volumetric_sources=sources)
+    consistency = validate_consistency(index, context, issues)
+    _apply_outcar_metadata(metadata, context, consistency.outcar_trusted)
+
+    fermi = consistency.fermi_candidate
+    if fermi is not None:
+        metadata.e_fermi = fermi
+
+    # A single file is never an MD or NEB root, but the capability pass reads
+    # these keys unconditionally and must find real (empty) indices rather
+    # than fall back to the electronic one and mistake this file for a
+    # trajectory.
+    empty = FileIndex(directory=path.parent)
+    context["md_index"] = empty
+    context["neb_index"] = empty
+
+    capabilities = _determine_capabilities(index, context, consistency)
+    if not index.entries or all(not e.exists for e in index.entries.values()):
+        issues.append(
+            Issue(
+                code="file_unrecognised",
+                message=f"{path.name} is not a VASP file this app can read.",
+                detail=(
+                    "Recognised single files are POSCAR, CONTCAR, CHGCAR, CHG, "
+                    "ELFCAR, LOCPOT, PARCHG, XDATCAR, EIGENVAL, DOSCAR, INCAR, "
+                    "KPOINTS, OUTCAR and vasprun.xml. Drop a calculation "
+                    "folder to open a full calculation."
+                ),
+                severity=Severity.WARNING,
+                source=path.name,
+            )
+        )
+
+    calculation = Calculation(
+        directory=path.parent,
+        index=index,
+        capabilities=capabilities,
+        metadata=metadata,
+        issues=issues,
+        md_directory=path.parent,
+        md_index=empty,
+        neb_directory=path.parent,
+        neb_index=empty,
+        volumetric_sources=sources,
+    )
+    log.info(
+        "Opened single file %s: %s",
+        path.name,
+        ", ".join(sorted(c.value for c in capabilities.available)) or "no capabilities",
+    )
+    return calculation
+
+
+def _discover_missing(directory: Path) -> Calculation:
+    index = FileIndex(directory=directory)
+    calculation = Calculation(directory=directory, index=index)
+    calculation.issues.append(
+        Issue(
+            code="directory_missing",
+            message="That folder no longer exists.",
+            severity=Severity.ERROR,
+        )
+    )
+    calculation.capabilities = _determine_capabilities(
+        index, {}, validate_consistency(index, {}, [])
     )
     return calculation

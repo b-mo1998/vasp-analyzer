@@ -20,6 +20,11 @@ class Capability(str, Enum):
     ELEMENT_PROJECTION = "element_projection"
     WANNIER_BANDS = "wannier_bands"
     KPATH_LABELS = "kpath_labels"
+    MD_TRAJECTORY = "md_trajectory"
+    MD_THERMODYNAMICS = "md_thermodynamics"
+    NEB_PATH = "neb_path"
+    NEB_ENERGIES = "neb_energies"
+    CHARGE_DENSITY = "charge_density"
     INPUT_FILES = "input_files"
     METADATA = "metadata"
 

@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
+
 from ....models.structure import StructureData
 
 CIF_TEMPLATE = """data_{formula}
@@ -63,11 +65,31 @@ def save_cif(structure: StructureData, path: Path) -> None:
 
 def save_poscar(structure: StructureData, path: Path) -> None:
     """Write VASP POSCAR/CONTCAR format — the same layout parsers/poscar.py
-    reads, so a round trip through this exporter and back is lossless."""
-    counts: dict[str, int] = {}
-    for species in structure.species:
-        counts[species] = counts.get(species, 0) + 1
-    elements = list(counts.keys())
+    reads, so a round trip through this exporter and back is lossless.
+
+    Atoms are written grouped by element. POSCAR's counts line describes
+    *runs* of one element, so interleaved species have no representation in
+    the format: writing "Si O / 2 1" while the coordinates run Si, O, Si
+    silently relabels the oxygen as silicon and vice versa. Reordering the
+    rows to match the counts is the only way to keep the file honest, and it
+    is what VASP itself expects.
+    """
+    # First-appearance element order, then every atom of each element in its
+    # original relative order.
+    elements: list[str] = []
+    for symbol in structure.species:
+        if symbol not in elements:
+            elements.append(symbol)
+    order: list[int] = []
+    for element in elements:
+        order.extend(i for i, s in enumerate(structure.species) if s == element)
+    counts = {e: sum(1 for s in structure.species if s == e) for e in elements}
+
+    flags = structure.selective_dynamics
+    if flags is not None:
+        flags = np.asarray(flags, dtype=bool)
+        if flags.ndim == 1:
+            flags = np.repeat(flags[:, None], 3, axis=1)
 
     # Two explicit spaces between every field, never relying on fixed-width
     # padding alone to separate columns: a value like -0.0000000000000000 is
@@ -83,8 +105,14 @@ def save_poscar(structure: StructureData, path: Path) -> None:
         )
     lines.append("   " + "   ".join(elements))
     lines.append("   " + "   ".join(str(counts[e]) for e in elements))
+    if flags is not None:
+        lines.append("Selective dynamics")
     lines.append("Direct")
-    for frac in structure.frac_coords:
-        lines.append("  " + "  ".join(f"{component:19.16f}" for component in frac))
+    for row in order:
+        frac = structure.frac_coords[row]
+        line = "  " + "  ".join(f"{component:19.16f}" for component in frac)
+        if flags is not None:
+            line += "  " + "  ".join("T" if free else "F" for free in flags[row])
+        lines.append(line)
 
     Path(path).write_text("\n".join(lines) + "\n")

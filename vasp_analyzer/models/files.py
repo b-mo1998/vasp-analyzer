@@ -81,6 +81,11 @@ VASP_ROLES: list[FileRole] = [
     FileRole("vasprun", "vasprun.xml", FileGroup.VASP, "Complete run record"),
     FileRole("procar", "PROCAR", FileGroup.VASP, "Projected band character"),
     FileRole("chgcar", "CHGCAR", FileGroup.VASP, "Charge density"),
+    FileRole("chg", "CHG", FileGroup.VASP, "Charge density (coarse)"),
+    FileRole("elfcar", "ELFCAR", FileGroup.VASP, "Electron localization function"),
+    FileRole("locpot", "LOCPOT", FileGroup.VASP, "Local electrostatic potential"),
+    FileRole("xdatcar", "XDATCAR", FileGroup.VASP, "Ionic trajectory"),
+    FileRole("oszicar", "OSZICAR", FileGroup.VASP, "Per-step energies"),
     FileRole("potcar", "POTCAR", FileGroup.VASP, "Pseudopotentials", hidden=True),
 ]
 

@@ -19,7 +19,7 @@ from vasp_analyzer.parsers.doscar import parse_doscar
 from vasp_analyzer.parsers.eigenval import parse_eigenval
 
 SILICON_DIR = Path("Silicon Files")
-GRAPHENE_DIR = Path("Graphene")
+GRAPHENE_DIR = Path("Graphene/band")
 
 # These two real calculation directories are the user's own data — gitignored,
 # not part of the repository, and won't exist for anyone else who clones it or

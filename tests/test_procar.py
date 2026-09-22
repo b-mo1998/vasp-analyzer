@@ -100,3 +100,88 @@ def test_peek_header_matches_full_parse(tmp_path):
     assert header.n_kpoints == full.n_kpoints
     assert header.n_bands == full.n_bands
     assert header.n_ions == full.n_ions
+
+
+# --- non-collinear (LSORBIT=T) spin texture ---------------------------------------
+#
+# Checked against a real graphene PROCAR run with LSORBIT=.TRUE.: bands 1/2
+# (a near-degenerate spin-orbit-split pair at Gamma) came back with mz values
+# of -0.570 and +0.570 — equal and opposite, exactly the textbook signature
+# of a Kramers pair. The synthetic fixture mirrors that layout: one "ion..."
+# header per band, four stacked ion tables (charge, mx, my, mz) with no
+# repeated header and no blank line between them.
+
+
+def test_noncollinear_procar_is_detected(tmp_path):
+    fixtures.write_procar_noncollinear(tmp_path, n_kpoints=3, n_bands=4, n_ions=2)
+    result = parse_procar(tmp_path / "PROCAR")
+
+    assert result.ok
+    data = result.value
+    assert data.is_noncollinear
+    assert data.spin_texture is not None
+    assert data.spin_texture.shape == (3, 4, 2, 9, 3)
+    # The charge (total-character) table still parses exactly as before —
+    # capturing mx/my/mz must not disturb the existing ion_weights path.
+    assert data.ion_weights.shape == (1, 3, 4, 2, 9)
+    assert data.n_spin == 1
+
+
+def test_noncollinear_charge_weights_match_the_fixture(tmp_path):
+    fixtures.write_procar_noncollinear(tmp_path, n_kpoints=2, n_bands=3, n_ions=2)
+    data = parse_procar(tmp_path / "PROCAR").value
+
+    for band in range(3):
+        assert data.ion_weights[0, 0, band, 0, 0] == pytest.approx(band + 1)
+
+
+def test_spin_projection_alternates_sign_by_band_as_the_fixture_defines(tmp_path):
+    fixtures.write_procar_noncollinear(tmp_path, n_kpoints=2, n_bands=4, n_ions=2)
+    data = parse_procar(tmp_path / "PROCAR").value
+
+    sz = data.spin_projection(axis=2)
+    assert sz.shape == (2, 4)
+    assert sz[0, 0] == pytest.approx(0.5)
+    assert sz[0, 1] == pytest.approx(-0.5)
+    assert sz[0, 2] == pytest.approx(0.5)
+    assert sz[0, 3] == pytest.approx(-0.5)
+
+    # mx and my are zero throughout the fixture.
+    assert np.allclose(data.spin_projection(axis=0), 0.0)
+    assert np.allclose(data.spin_projection(axis=1), 0.0)
+
+
+def test_spin_projection_respects_orbital_restriction(tmp_path):
+    # All of the fixture's spin weight sits on ion 1's orbital 0 ("s"); a
+    # filter that excludes "s" should zero it out.
+    fixtures.write_procar_noncollinear(tmp_path, n_kpoints=1, n_bands=2, n_ions=2)
+    data = parse_procar(tmp_path / "PROCAR").value
+
+    assert data.spin_projection(axis=2, orbitals=["s"])[0, 0] == pytest.approx(0.5)
+    assert data.spin_projection(axis=2, orbitals=["pz"])[0, 0] == pytest.approx(0.0)
+
+
+def test_collinear_procar_has_no_spin_texture(tmp_path):
+    fixtures.write_procar(tmp_path, n_kpoints=3, n_bands=2, n_ions=2)
+    data = parse_procar(tmp_path / "PROCAR").value
+
+    assert not data.is_noncollinear
+    assert data.spin_texture is None
+    assert data.spin_projection() is None
+
+
+def test_real_graphene_procar_has_consistent_kramers_pair_spin(tmp_path):
+    """The actual physics check against real data: bands 1 and 2 at k-point 1
+    (Gamma) are the lowest spin-orbit-split Kramers pair — near-degenerate in
+    energy, equal and opposite in z-spin."""
+    from pathlib import Path
+
+    real = Path("Graphene/band/PROCAR")
+    if not real.exists():
+        pytest.skip("requires the local Graphene/ data")
+
+    data = parse_procar(real).value
+    assert data.is_noncollinear
+    sz = data.spin_projection(axis=2)
+    assert sz[0, 0] == pytest.approx(-sz[0, 1], abs=1e-6)
+    assert abs(sz[0, 0]) > 0.1  # a real, non-trivial spin splitting

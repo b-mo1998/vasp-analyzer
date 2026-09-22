@@ -6,7 +6,16 @@ to native Fusion painting once nested inside a QScrollArea — and every
 sidebar in this app is one. That was invisible in isolated widget tests (a
 bare QSlider outside a scroll area styles correctly) and only showed up
 embedded in a real sidebar, which is what made it easy to miss. The rendering
-test below reproduces the exact nesting rather than trusting the fix on paper.
+tests below reproduce the exact nesting rather than trusting the fix on paper.
+
+They originally asserted that *no* track was drawn at all, because the first
+fix for the native-groove bug painted only the accent fill and the knob. The
+design has since gained a deliberate grey track showing the full range, so
+"is anything grey there?" can no longer tell an intentional track apart from
+a regressed native groove. What distinguishes them is the exact colours: our
+painter draws the unfilled track in ``PALETTE.border`` and the filled span in
+``PALETTE.accent``, neither of which Fusion's groove uses. The tests check
+for those instead.
 """
 
 from __future__ import annotations
@@ -116,10 +125,20 @@ def test_slider_row_set_range_rescales_slider_bounds(qapp):
 # --- the QScrollArea regression ------------------------------------------------
 
 
-def test_slider_in_a_scroll_area_still_shows_no_track(qapp, qtbot):
+def _sample_track(widget, slider, fraction: float):
+    """Colour of the slider's track at ``fraction`` across its width, sampled
+    from a real render of ``widget``."""
+    top_left = slider.mapTo(widget, slider.rect().topLeft())
+    inset = 8  # clear of the knob's rounded cap at either end
+    x = top_left.x() + inset + int((slider.width() - 2 * inset) * fraction)
+    y = top_left.y() + slider.height() // 2
+    return widget.grab().toImage().pixelColor(x, y)
+
+
+def test_slider_in_a_scroll_area_paints_its_own_track(qapp, qtbot):
     """A bare-QSlider version of this exact test used to pass while the real
     app, which always nests sliders inside a QScrollArea, showed a solid gray
-    track. Reproduce the real nesting, not an easier case."""
+    native groove. Reproduce the real nesting, not an easier case."""
     apply_theme(qapp)
 
     scroll = QScrollArea()
@@ -127,6 +146,8 @@ def test_slider_in_a_scroll_area_still_shows_no_track(qapp, qtbot):
     content = QWidget()
     layout = QVBoxLayout(content)
     layout.setContentsMargins(20, 20, 20, 20)
+    # Mid-range, so there is a filled span to the left of the knob and an
+    # unfilled one to the right.
     row = SliderRow("Y-Axis Min", -20.0, 0.0, -10.0, 0.1, "eV")
     layout.addWidget(row)
     scroll.setWidget(content)
@@ -135,16 +156,19 @@ def test_slider_in_a_scroll_area_still_shows_no_track(qapp, qtbot):
     scroll.show()
     qtbot.waitExposed(scroll)
 
-    image = scroll.grab().toImage()
-    # Sample past the knob, where the old QSlider left a solid grey bar.
-    sampled = image.pixelColor(250, 75)
-    assert _luminance(sampled) > 240, (
-        f"slider track is visible past the knob ({sampled.name()}) inside a "
-        "QScrollArea — the native-QSlider-in-a-scroll-area bug has regressed"
+    filled = _sample_track(scroll, row._slider, 0.1)
+    unfilled = _sample_track(scroll, row._slider, 0.9)
+
+    assert filled.name() == PALETTE.accent, (
+        f"filled span is {filled.name()}, not the accent colour — the "
+        "native-QSlider-in-a-scroll-area bug has regressed"
+    )
+    assert unfilled.name() == PALETTE.border, (
+        f"unfilled track is {unfilled.name()}, not the intended track colour"
     )
 
 
-def test_real_bands_sidebar_slider_track_is_invisible(qapp, qtbot):
+def test_real_bands_sidebar_slider_paints_its_own_track(qapp, qtbot):
     apply_theme(qapp)
     sidebar = BandsSidebar()
     sidebar.resize(280, 500)
@@ -153,10 +177,12 @@ def test_real_bands_sidebar_slider_track_is_invisible(qapp, qtbot):
     qtbot.waitExposed(sidebar)
 
     slider = sidebar.y_min._slider
-    global_point = slider.mapTo(sidebar, slider.rect().bottomRight())
-    sampled = sidebar.grab().toImage().pixelColor(
-        global_point.x() - 5, global_point.y() - slider.height() // 2
+    filled = _sample_track(sidebar, slider, 0.1)
+    unfilled = _sample_track(sidebar, slider, 0.95)
+
+    assert filled.name() == PALETTE.accent, (
+        f"Y-Axis Min filled span is {filled.name()}, not the accent colour"
     )
-    assert _luminance(sampled) > 240, (
-        f"Y-Axis Min slider shows a track past the knob ({sampled.name()})"
+    assert unfilled.name() == PALETTE.border, (
+        f"Y-Axis Min unfilled track is {unfilled.name()}, not the track colour"
     )

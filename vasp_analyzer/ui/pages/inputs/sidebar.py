@@ -38,13 +38,24 @@ STATUS_TOOLTIP = {
 
 
 class FileRow(QWidget):
-    """One selectable file entry."""
+    """One selectable file entry.
 
-    clicked = Signal(str)  # role key
+    ``source`` distinguishes which root the file was found in — "" for the
+    primary electronic-structure directory, "md"/"neb" for a project's other
+    roots — since the same role (e.g. "incar") can legitimately appear in
+    more than one section at once. ``file_key`` (source-prefixed) is what
+    identifies the row for selection; ``role_key`` (bare) is what the rest of
+    the app (validators, editability) keys off.
+    """
 
-    def __init__(self, entry: FileEntry, parent: QWidget | None = None) -> None:
+    clicked = Signal(str)  # file key
+
+    def __init__(
+        self, entry: FileEntry, source: str = "", parent: QWidget | None = None
+    ) -> None:
         super().__init__(parent)
         self._entry = entry
+        self._source = source
         self._selected = False
         self.setCursor(Qt.PointingHandCursor)
         self.setFixedHeight(30)
@@ -81,6 +92,10 @@ class FileRow(QWidget):
     def role_key(self) -> str:
         return self._entry.role.key
 
+    @property
+    def file_key(self) -> str:
+        return f"{self._source}:{self._entry.role.key}" if self._source else self._entry.role.key
+
     def set_selected(self, selected: bool) -> None:
         self._selected = selected
         self._apply_style()
@@ -115,7 +130,7 @@ class FileRow(QWidget):
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt naming
         if self._entry.exists:
-            self.clicked.emit(self.role_key)
+            self.clicked.emit(self.file_key)
         super().mousePressEvent(event)
 
 
@@ -124,7 +139,9 @@ class FileSection(QWidget):
 
     rowClicked = Signal(str)
 
-    def __init__(self, title: str, parent: QWidget | None = None) -> None:
+    def __init__(
+        self, title: str, source: str = "", parent: QWidget | None = None
+    ) -> None:
         super().__init__(parent)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -146,6 +163,7 @@ class FileSection(QWidget):
         layout.addWidget(self._container)
 
         self._title = title
+        self._source = source
         self._expanded = True
         self._rows: list[FileRow] = []
 
@@ -161,7 +179,7 @@ class FileSection(QWidget):
         self._rows.clear()
 
     def add_entry(self, entry: FileEntry) -> FileRow:
-        row = FileRow(entry)
+        row = FileRow(entry, source=self._source)
         row.clicked.connect(self.rowClicked)
         self._rows_layout.addWidget(row)
         self._rows.append(row)
@@ -188,6 +206,9 @@ class InputsSidebar(QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.NoFrame)
+        # A sidebar is a fixed-width column; anything too wide for it is a
+        # layout bug to fix at the source, not something to scroll sideways.
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         outer.addWidget(scroll)
 
         content = QWidget()
@@ -217,6 +238,17 @@ class InputsSidebar(QWidget):
             layout.addWidget(section)
             self._sections[group] = section
 
+        # A project laid out into band/md/neb subdirectories keeps its own
+        # INCAR, KPOINTS, POTCAR etc. per root — these are only shown when
+        # that root is a genuinely different directory from the primary one.
+        self._extra_sections: dict[str, FileSection] = {}
+        for source, title in (("md", "MD Calculation"), ("neb", "NEB Calculation")):
+            section = FileSection(title, source=source)
+            section.rowClicked.connect(self._on_row_clicked)
+            section.hide()
+            layout.addWidget(section)
+            self._extra_sections[source] = section
+
         self._empty = Label(
             "No recognised files in this folder.", "TertiaryLabel"
         )
@@ -233,10 +265,14 @@ class InputsSidebar(QWidget):
     def populate(self, calculation: Calculation | None) -> None:
         for section in self._sections.values():
             section.clear()
+        for section in self._extra_sections.values():
+            section.clear()
         self._selected = None
 
         if calculation is None:
             for section in self._sections.values():
+                section.hide()
+            for section in self._extra_sections.values():
                 section.hide()
             self._empty.setText("No calculation is open.")
             self._empty.show()
@@ -255,15 +291,33 @@ class InputsSidebar(QWidget):
             section.show()
             any_rows = any_rows or bool(entries)
 
+        # A project's MD/NEB roots only get their own section when they are
+        # genuinely separate directories from the electronic-structure one —
+        # an ordinary flat calculation has nothing extra to show here.
+        extra_roots = {
+            "md": (calculation.md_directory, calculation.md_index),
+            "neb": (calculation.neb_directory, calculation.neb_index),
+        }
+        for source, (root, index) in extra_roots.items():
+            section = self._extra_sections[source]
+            if root == calculation.directory or index is None:
+                section.hide()
+                continue
+            entries = index.in_group(FileGroup.VASP)
+            for entry in entries:
+                section.add_entry(entry)
+            section.show()
+            any_rows = any_rows or bool(entries)
+
         self._empty.setVisible(not any_rows)
         if not any_rows:
             self._empty.setText("No recognised files in this folder.")
 
-    def select(self, role_key: str) -> None:
-        self._selected = role_key
-        for section in self._sections.values():
+    def select(self, file_key: str) -> None:
+        self._selected = file_key
+        for section in list(self._sections.values()) + list(self._extra_sections.values()):
             for row in section.rows():
-                row.set_selected(row.role_key == role_key)
+                row.set_selected(row.file_key == file_key)
 
     def first_available(self) -> str | None:
         """The file a freshly opened calculation should show."""
@@ -279,6 +333,6 @@ class InputsSidebar(QWidget):
                 return key
         return next(iter(sorted(available)), None)
 
-    def _on_row_clicked(self, role_key: str) -> None:
-        self.select(role_key)
-        self.fileSelected.emit(role_key)
+    def _on_row_clicked(self, file_key: str) -> None:
+        self.select(file_key)
+        self.fileSelected.emit(file_key)

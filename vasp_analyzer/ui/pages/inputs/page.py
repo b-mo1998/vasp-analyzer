@@ -5,8 +5,8 @@ from __future__ import annotations
 import datetime as dt
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QGuiApplication, QKeySequence, QShortcut
+from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtGui import QGuiApplication, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -27,6 +27,7 @@ from ....parsers.incar import parse_incar
 from ....parsers.kpoints import parse_kpoints
 from ....parsers.poscar import parse_poscar
 from ....parsers.wannier import parse_win
+from ...style import icon_url
 from ...theme import PALETTE, RADIUS, SPACING, TYPE
 from ...widgets.empty_state import EmptyState
 from ...widgets.notice import Notice
@@ -68,6 +69,7 @@ class InputsPage(Page):
         self._sidebar = InputsSidebar()
         self._sidebar.fileSelected.connect(self.show_file)
         self._current: FileEntry | None = None
+        self._current_key: str | None = None
         self._truncated = False
         self._backed_up: set[Path] = set()
 
@@ -121,6 +123,10 @@ class InputsPage(Page):
         )
         row.addWidget(self._filename)
 
+        self._source_label = QLabel("")
+        self._source_label.setObjectName("TertiaryLabel")
+        row.addWidget(self._source_label)
+
         self._badge = QLabel("")
         self._badge.setAlignment(Qt.AlignCenter)
         row.addWidget(self._badge)
@@ -131,8 +137,39 @@ class InputsPage(Page):
         self._search.setPlaceholderText("Search in file…")
         self._search.setFixedWidth(210)
         self._search.textChanged.connect(self._on_search)
-        self._search.returnPressed.connect(self._on_search_next)
+        # Enter steps forward through the matches, Shift+Enter back -- the
+        # same keys every editor's find bar uses -- with the two arrow
+        # buttons beside the field as the visible version of the same thing.
+        self._search.returnPressed.connect(self._on_search_return)
         row.addWidget(self._search)
+
+        # Icons rather than "‹" / "›" text: the shared #ToolButton style
+        # carries 12px of horizontal padding, which on a 26px-wide button
+        # leaves 2px for a glyph -- so the text was squeezed out entirely and
+        # both buttons rendered as empty boxes. An icon is drawn inside the
+        # padding rather than laid out by it, and matches every other icon
+        # button in the app.
+        self._search_previous = QPushButton()
+        self._search_previous.setObjectName("ToolButton")
+        self._search_previous.setIcon(QIcon(icon_url("chevron-left.svg")))
+        self._search_previous.setIconSize(QSize(13, 13))
+        self._search_previous.setFixedSize(28, 28)
+        self._search_previous.setToolTip("Previous match  (Shift+Enter)")
+        self._search_previous.setCursor(Qt.PointingHandCursor)
+        self._search_previous.setEnabled(False)
+        self._search_previous.clicked.connect(self._on_search_previous)
+        row.addWidget(self._search_previous)
+
+        self._search_next = QPushButton()
+        self._search_next.setObjectName("ToolButton")
+        self._search_next.setIcon(QIcon(icon_url("chevron-right.svg")))
+        self._search_next.setIconSize(QSize(13, 13))
+        self._search_next.setFixedSize(28, 28)
+        self._search_next.setToolTip("Next match  (Enter)")
+        self._search_next.setCursor(Qt.PointingHandCursor)
+        self._search_next.setEnabled(False)
+        self._search_next.clicked.connect(self._on_search_next)
+        row.addWidget(self._search_next)
 
         self._match_label = QLabel("")
         self._match_label.setObjectName("TertiaryLabel")
@@ -217,6 +254,7 @@ class InputsPage(Page):
     def set_calculation(self, calculation: Calculation | None) -> None:
         super().set_calculation(calculation)
         self._current = None
+        self._current_key = None
         self._backed_up.clear()
         self._notice.clear()
         self._sidebar.populate(calculation)
@@ -243,21 +281,31 @@ class InputsPage(Page):
 
     # -- file display ---------------------------------------------------------------
 
-    def show_file(self, role_key: str) -> None:
+    _SOURCE_INDEX_ATTR = {"": "index", "md": "md_index", "neb": "neb_index"}
+    _SOURCE_LABEL = {"md": "MD calculation", "neb": "NEB calculation"}
+
+    def show_file(self, file_key: str) -> None:
         calculation = self.calculation()
         if calculation is None:
             return
-        entry = calculation.index.entries.get(role_key)
+        source, sep, role_key = file_key.partition(":")
+        if not sep:
+            source, role_key = "", file_key
+        index = getattr(calculation, self._SOURCE_INDEX_ATTR.get(source, "index"), None)
+        if index is None:
+            return
+        entry = index.entries.get(role_key)
         if entry is None or entry.path is None or not entry.exists:
             return
 
         if self._confirm_discard() is False:
             # Put the selection back where it was.
-            if self._current is not None:
-                self._sidebar.select(self._current.role.key)
+            if self._current_key is not None:
+                self._sidebar.select(self._current_key)
             return
 
         self._current = entry
+        self._current_key = file_key
         self._notice.clear()
         self._edit_button.setChecked(False)
         self._search.clear()
@@ -274,6 +322,7 @@ class InputsPage(Page):
 
         self._editor.document().setModified(False)
         self._filename.setText(entry.name)
+        self._source_label.setText(self._SOURCE_LABEL.get(source, ""))
         self._apply_badge(entry, text)
         self._update_stats(text, role_key)
 
@@ -289,7 +338,7 @@ class InputsPage(Page):
             )
         )
         self._stack.setCurrentIndex(0)
-        self._sidebar.select(role_key)
+        self._sidebar.select(file_key)
 
     def _read_file(self, entry: FileEntry) -> tuple[str, Issue | None]:
         self._truncated = False
@@ -394,14 +443,31 @@ class InputsPage(Page):
         elif count == 0:
             self._match_label.setText("No results")
         else:
-            current, total = self._editor.match_position()
-            self._match_label.setText(f"{current} of {total}")
+            self._update_match_label()
+        # Arrows only mean something with more than one place to go.
+        for button in (self._search_previous, self._search_next):
+            button.setEnabled(count > 1)
 
-    def _on_search_next(self) -> None:
-        self._editor.next_match()
+    def _update_match_label(self) -> None:
         current, total = self._editor.match_position()
         if total:
             self._match_label.setText(f"{current} of {total}")
+
+    def _on_search_return(self) -> None:
+        from PySide6.QtWidgets import QApplication  # noqa: PLC0415
+
+        if QApplication.keyboardModifiers() & Qt.ShiftModifier:
+            self._on_search_previous()
+        else:
+            self._on_search_next()
+
+    def _on_search_next(self) -> None:
+        self._editor.next_match()
+        self._update_match_label()
+
+    def _on_search_previous(self) -> None:
+        self._editor.previous_match()
+        self._update_match_label()
 
     # -- editing -------------------------------------------------------------------------
 
@@ -503,9 +569,9 @@ class InputsPage(Page):
         menu.exec(self._more.mapToGlobal(self._more.rect().bottomLeft()))
 
     def _reload(self) -> None:
-        if self._current is not None:
+        if self._current_key is not None:
             self._editor.document().setModified(False)
-            self.show_file(self._current.role.key)
+            self.show_file(self._current_key)
 
     def _reveal(self) -> None:
         import subprocess

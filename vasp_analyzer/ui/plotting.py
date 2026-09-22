@@ -71,6 +71,11 @@ def apply_plot_style() -> None:
     )
 
 
+# Room reserved beside the y tick labels for the tick marks, the label pad and
+# the axis title.
+AXIS_LABEL_ALLOWANCE = 26.0
+
+
 class PlotCanvas(FigureCanvasQTAgg):
     """A themed matplotlib canvas with pixel-accurate margins."""
 
@@ -78,6 +83,24 @@ class PlotCanvas(FigureCanvasQTAgg):
         figure = Figure(figsize=(4, 3), dpi=100, facecolor=PALETTE.surface)
         super().__init__(figure)
         self._margins = margins or PixelMargins()
+        # Widened at draw time when the y tick labels turn out not to fit;
+        # see _fit_left_margin.
+        self._extra_left = 0.0
+        # FigureCanvasQTAgg.sizeHint() reports the figure's *current* pixel
+        # size, which the base class's resizeEvent keeps in sync with
+        # whatever size the canvas is actually drawn at. That is fine while
+        # it only ever grows to fill a layout slot — the bug is that popping
+        # this canvas out into a much larger standalone window (see
+        # widgets/popout.py) grows the figure to match, and the grown size
+        # is never un-done on the way back: sizeHint keeps reporting the
+        # popped-out size forever, so the card it lives in asks its layout
+        # for more room than it used to on every trip through the pop-out,
+        # compounding a little further each time. A fixed preferred size,
+        # independent of whatever size the figure happens to be drawn at
+        # right now, is what makes the widget size back down correctly once
+        # it's back in its normal (stretch-driven) layout slot.
+        self._preferred_size = QSize(int(figure.get_figwidth() * figure.dpi),
+                                      int(figure.get_figheight() * figure.dpi))
         self.axes = figure.add_subplot(111)
         self._style_axes()
         self.setMinimumSize(QSize(120, 120))
@@ -87,6 +110,12 @@ class PlotCanvas(FigureCanvasQTAgg):
         palette.setColor(QPalette.Window, QColor(PALETTE.surface))
         self.setPalette(palette)
         self.setAutoFillBackground(True)
+
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt naming
+        return self._preferred_size
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt naming
+        return self.minimumSize()
 
     # -- styling ------------------------------------------------------------
 
@@ -110,7 +139,7 @@ class PlotCanvas(FigureCanvasQTAgg):
         ratio = float(self.devicePixelRatioF() or 1.0)
         m = self._margins
 
-        left = (m.left * ratio) / width
+        left = ((m.left + self._extra_left) * ratio) / width
         right = 1.0 - (m.right * ratio) / width
         bottom = (m.bottom * ratio) / height
         top = 1.0 - (m.top * ratio) / height
@@ -128,4 +157,43 @@ class PlotCanvas(FigureCanvasQTAgg):
 
     def redraw(self) -> None:
         self._apply_margins()
+        self._fit_left_margin()
         self.draw_idle()
+
+    def _fit_left_margin(self) -> None:
+        """Widen the left inset when the y tick labels do not fit inside it.
+
+        A fixed inset is a guess about how many characters a tick label will
+        need, and the guess fails exactly where it matters most: an MD total
+        energy of -458.85 eV rendered inside a 52px inset loses its leading
+        digits and reads as "58.85", which is not a smaller number but a
+        different one. Measuring the labels that were actually drawn is the
+        only way to be right for every dataset.
+        """
+        try:
+            renderer = self.figure.canvas.get_renderer()
+        except (AttributeError, RuntimeError):
+            return
+
+        widest = 0.0
+        for label in self.axes.get_yticklabels():
+            if not label.get_text():
+                continue
+            try:
+                extent = label.get_window_extent(renderer=renderer)
+            except (RuntimeError, ValueError):
+                continue
+            widest = max(widest, float(extent.width))
+        if widest <= 0.0:
+            return
+
+        ratio = float(self.devicePixelRatioF() or 1.0)
+        # Tick marks, the label-to-axis pad and the y-axis title all live in
+        # the same inset, so the labels alone must not consume the whole of it.
+        needed = widest / ratio + AXIS_LABEL_ALLOWANCE
+        extra = max(0.0, needed - self._margins.left)
+        # Only ever grow, and only in visible steps, so a redraw triggered by
+        # the adjustment cannot oscillate.
+        if extra > self._extra_left + 1.0:
+            self._extra_left = extra
+            self._apply_margins()

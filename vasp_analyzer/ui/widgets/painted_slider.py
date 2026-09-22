@@ -3,10 +3,13 @@
 QSlider's stylesheet subcontrols (``::groove``, ``::add-page``, ``::sub-page``)
 turn out to silently fall back to native Fusion painting once the slider sits
 inside a QScrollArea — and every sidebar in this app is one. Rather than fight
-that Qt/style quirk, the slider is painted directly: an accent-coloured fill
-from the left edge to the knob, and the knob itself. Nothing else is drawn, so
-there is no unfilled "track" to render at all — the slider is just the slider,
-identically wherever it's placed.
+that Qt/style quirk, the slider is painted directly: a grey track for the full
+range, an accent-coloured fill from the left edge to the knob, and the knob
+itself — identically wherever it's placed.
+
+The full-width track matters for legibility, not decoration: without it a
+slider sitting at or near its minimum is just a dot floating in whitespace,
+with nothing to show how far it can travel or that it is a slider at all.
 
 Values are kept as floats throughout. QSlider only understands integers, so
 the previous implementation converted a float range to slider steps and back;
@@ -120,6 +123,11 @@ class PaintedSlider(QWidget):
         enabled = self.isEnabled()
         track = self._track_rect()
         knob = self._knob_center()
+
+        # The unfilled track first, so the accent fill paints over it.
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(PALETTE.border if enabled else PALETTE.surface_sunken))
+        painter.drawRoundedRect(track, track.height() / 2, track.height() / 2)
 
         fill_width = max(0.0, knob.x() - track.left())
         if fill_width > 0:

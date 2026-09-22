@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
@@ -26,6 +27,22 @@ def main() -> int:
 
     window = MainWindow()
     window.show()
+
+    # A directory argument here means "Reload Calculation" restarted this
+    # process (see MainWindow.restart_argv) and wants the same calculation
+    # reopened, rather than landing on a blank window. Scanned rather than
+    # read from a fixed position: the launcher differs between a frozen
+    # bundle and a `python -m` run, and a Finder "Open With" can prepend
+    # arguments of its own.
+    for argument in sys.argv[1:]:
+        target = Path(argument)
+        if target.is_dir():
+            window.open_directory(target)
+            break
+        if target.is_file():
+            window.open_file(target)
+            break
+
     log.info("Application started")
     return app.exec()
 

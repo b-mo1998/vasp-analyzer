@@ -39,6 +39,10 @@ class Site:
     symbol: str
     position: np.ndarray    # cartesian, Å
     is_ghost: bool = False
+    # Lattice translation this ghost is displaced by, in Å. Lets a caller move
+    # ghosts with their parent atom (as trajectory playback does) without
+    # repeating the neighbour search.
+    shift: np.ndarray | None = None
 
 
 @dataclass
@@ -66,9 +70,14 @@ def build_sites_and_bonds(
     if n_atoms > MAX_ATOMS_FOR_BONDS:
         log.info("Skipping bond search for %d atoms", n_atoms)
         return result
+    if n_atoms == 0:
+        # Reachable from the editor, where deleting every atom is a legitimate
+        # (and undoable) step. There is nothing to bond, and the neighbour
+        # search below would fail on empty arrays rather than return nothing.
+        return result
 
-    radii = np.array([covalent_radius(s) for s in structure.species])
-    metallic = np.array([is_metal(s) for s in structure.species])
+    radii = np.array([covalent_radius(s) for s in structure.species], dtype=float)
+    metallic = np.array([is_metal(s) for s in structure.species], dtype=bool)
     # In a compound, a short cation-cation contact is not a bond: rutile's
     # Ti atoms sit 2.96 Å apart along c and drawing that would misrepresent the
     # structure. In an elemental metal or an alloy those contacts are the
@@ -125,6 +134,7 @@ def build_sites_and_bonds(
                         symbol=structure.species[j],
                         position=images[flat],
                         is_ghost=True,
+                        shift=offset @ lattice,
                     )
                 )
             result.bonds.append((i, ghost_index))
@@ -136,6 +146,61 @@ def build_sites_and_bonds(
         len(result.bonds),
     )
     return result
+
+
+def nearest_neighbors(
+    frac_coords: np.ndarray, lattice: np.ndarray, index: int, k: int = 3
+) -> list[tuple[int, np.ndarray, float]]:
+    """The ``k`` closest neighbouring *bonds* to ``index``, periodic images
+    included.
+
+    Returns ``(neighbour_row, unit_direction, distance)`` nearest first,
+    where ``unit_direction`` points from ``index`` toward the neighbour in
+    cartesian Å.
+
+    Deliberately *not* a plain minimum-image search: that finds only the
+    closest periodic copy of each other atom, which collapses to one result
+    per row and misses real bonds. Graphene's two-atom cell is the clearest
+    case — each carbon has three physical C-C bonds, all to periodic copies
+    of the *same* other atom, not to three different atoms — so every one of
+    the 27 neighbouring periodic images of every other atom is a candidate,
+    and the same row can legitimately appear more than once with a different
+    direction.
+
+    Plain arrays rather than a model class, so this works the same for a
+    read-only :class:`~vasp_analyzer.models.structure.StructureData` (the
+    Structure page) and the mutable
+    :class:`~vasp_analyzer.models.editable.EditableStructure` (the Editor's
+    move gizmo) without either page depending on the other's model.
+    """
+    n = len(frac_coords)
+    if n < 2 or not (0 <= index < n):
+        return []
+    origin = frac_coords[index] @ lattice
+    offsets = np.array(
+        [[i, j, kk] for i in (-1, 0, 1) for j in (-1, 0, 1) for kk in (-1, 0, 1)],
+        dtype=float,
+    )
+    shifts = offsets @ lattice                              # (27, 3)
+    base = frac_coords @ lattice                             # (n, 3)
+    candidates = base[:, None, :] + shifts[None, :, :]        # (n, 27, 3)
+    deltas = candidates - origin                               # (n, 27, 3)
+    distances = np.linalg.norm(deltas, axis=2)                 # (n, 27)
+    distances[index, :] = np.inf                               # never bond to self
+
+    n_shifts = len(shifts)
+    order = np.argsort(distances, axis=None)
+    results: list[tuple[int, np.ndarray, float]] = []
+    for flat_index in order:
+        distance = float(distances.flat[flat_index])
+        if not np.isfinite(distance) or distance < 1e-6:
+            continue
+        row = int(flat_index) // n_shifts
+        delta = deltas.reshape(-1, 3)[flat_index]
+        results.append((row, delta / distance, distance))
+        if len(results) >= k:
+            break
+    return results
 
 
 def unit_cell_edges(lattice: np.ndarray) -> list[tuple[np.ndarray, np.ndarray]]:

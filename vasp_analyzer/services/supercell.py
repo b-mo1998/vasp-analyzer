@@ -41,12 +41,23 @@ def build_supercell(structure: StructureData, na: int, nb: int, nc: int) -> Stru
     tiled_species = list(structure.species) * len(offsets)
     tiled_lattice = structure.lattice * repeats[:, None]
 
+    # Constraints belong to the atom, so every copy of an atom inherits them.
+    # Tiled the same way the species list is, to stay aligned with the
+    # cell-major / atom-minor flattening above.
+    tiled_selective = None
+    if structure.selective_dynamics is not None:
+        flags = np.asarray(structure.selective_dynamics, dtype=bool)
+        if flags.ndim == 1:
+            flags = np.repeat(flags[:, None], 3, axis=1)
+        tiled_selective = np.tile(flags, (len(offsets), 1))
+
     return StructureData(
         lattice=tiled_lattice,
         species=tiled_species,
         frac_coords=tiled_frac,
         comment=structure.comment,
         source=structure.source,
+        selective_dynamics=tiled_selective,
     )
 
 
