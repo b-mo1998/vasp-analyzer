@@ -9,6 +9,9 @@ writes to the calculation: this page reads a finished phonon run.
 
 from __future__ import annotations
 
+import csv
+import io
+import re
 from pathlib import Path
 
 import numpy as np
@@ -70,6 +73,22 @@ DATASET_PHONON = "phonon"
 # precomputed frame array small even for a drawn supercell.
 N_PHASES = 24
 BASE_INTERVAL_MS = 40
+
+# Every point where a spreadsheet could start reading a cell as a formula: a
+# formula character at the start of the text, or after any character that is
+# not a letter or digit. The second case matters because the importer, not
+# this file, picks the separator -- comma, semicolon, tab, space or another --
+# so a name such as "Si;=cmd|..." starts a new cell part-way through.
+_FORMULA_START = re.compile(r"(?<![0-9A-Za-z])(?=[=+\-@\t\r])")
+
+
+def _spreadsheet_text(text: str) -> str:
+    """``text`` with an apostrophe before each place a formula could begin.
+
+    Species names come from the calculation's own files, so they are not
+    trusted. Element symbols such as "Si" or "Fe_pv" come out unchanged.
+    """
+    return _FORMULA_START.sub("'", text)
 
 
 class PhononsPage(Page):
@@ -972,10 +991,14 @@ class PhononsPage(Page):
         dos = phonon_service.project_dos_by_element(dataset, smearing)
         if dos is None:
             dos = phonon_service.gaussian_dos(dataset.frequency_matrix, smearing)
-        columns = ["frequency_THz", "total"] + list(dos.projected)
-        lines = [",".join(columns)]
+        columns = ["frequency_THz", "total"] + [
+            _spreadsheet_text(name) for name in dos.projected
+        ]
+        buffer = io.StringIO()
+        writer = csv.writer(buffer, lineterminator="\n")
+        writer.writerow(columns)
         for index, frequency in enumerate(dos.frequencies):
             row = [f"{frequency:.8f}", f"{dos.total[index]:.8f}"]
             row.extend(f"{values[index]:.8f}" for values in dos.projected.values())
-            lines.append(",".join(row))
-        path.write_text("\n".join(lines) + "\n")
+            writer.writerow(row)
+        path.write_text(buffer.getvalue())

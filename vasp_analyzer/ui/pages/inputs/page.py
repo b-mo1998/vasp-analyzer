@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
 from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt, Signal
@@ -55,6 +56,38 @@ VALIDATORS = {
     "contcar": parse_poscar,
     "w90_win": parse_win,
 }
+
+# How many suffixed names to try when the timestamped backup name is taken.
+BACKUP_NAME_ATTEMPTS = 100
+
+
+def _write_backup(path: Path) -> Path:
+    """Copy ``path`` to a new ``<name>.backup-<stamp>`` file beside it.
+
+    The backup is always a freshly created file: anything already at the name,
+    including a symlink planted in the folder, is never written through or
+    overwritten. A taken name moves on to ``-1``, ``-2``, ... suffixes.
+    """
+    data = path.read_bytes()
+    stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    flags = (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_BINARY", 0)
+    )
+    for attempt in range(BACKUP_NAME_ATTEMPTS):
+        suffix = f"-{attempt}" if attempt else ""
+        backup = path.with_name(f"{path.name}.backup-{stamp}{suffix}")
+        try:
+            fd = os.open(backup, flags, 0o666)
+        except FileExistsError:
+            continue
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+        return backup
+    raise FileExistsError(f"No free backup name for {path.name}")
 
 
 class InputsPage(Page):
@@ -504,9 +537,7 @@ class InputsPage(Page):
         path = entry.path
         try:
             if path not in self._backed_up:
-                stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-                backup = path.with_name(f"{path.name}.backup-{stamp}")
-                backup.write_bytes(path.read_bytes())
+                backup = _write_backup(path)
                 self._backed_up.add(path)
                 log.info("Backed up %s to %s", path, backup.name)
 

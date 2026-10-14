@@ -325,6 +325,19 @@ def test_ionic_state_prefers_sigma_zero_energy(tmp_path):
     assert state.max_force == pytest.approx(0.003, abs=1e-6)
 
 
+def test_ionic_state_digit_run_does_not_backtrack_quadratically(tmp_path):
+    # A long digit run with no whitespace after it used to make the
+    # energy(sigma->0) regex backtrack O(n^2) times and hang the NEB page.
+    (tmp_path / "OUTCAR").write_text(
+        "  free  energy   TOTEN  =       -73.58119959 eV\n"
+        "  energy  without entropy= " + "1" * 200_000
+    )
+    result = parse_ionic_state(tmp_path / "OUTCAR")
+
+    assert result.value.energy is None
+    assert result.value.free_energy == pytest.approx(-73.58119959)
+
+
 # --- real data ---------------------------------------------------------------------------------
 
 

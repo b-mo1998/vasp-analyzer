@@ -151,8 +151,12 @@ def parse_outcar(path: Path) -> ParseResult[OutcarInfo]:
 
 # --- final ionic state (used by the NEB page) ------------------------------------
 
-_RE_SIGMA0 = re.compile(r"energy\s+without\s+entropy\s*=\s*(-?\d+\.?\d*)\s+"
-                        r"energy\(sigma->0\)\s*=\s*(-?\d+\.?\d*)")
+# The number groups are written ``\d+(?:\.\d*)?`` rather than ``\d+\.?\d*``:
+# both match the same strings, but the latter can split one run of digits
+# between ``\d+`` and ``\d*`` in O(n) ways, so a crafted digit run that is not
+# followed by whitespace makes the match backtrack O(n^2) times.
+_RE_SIGMA0 = re.compile(r"energy\s+without\s+entropy\s*=\s*(-?\d+(?:\.\d*)?)\s+"
+                        r"energy\(sigma->0\)\s*=\s*(-?\d+(?:\.\d*)?)")
 _RE_TOTEN = re.compile(r"free\s+energy\s+TOTEN\s*=\s*(-?\d+\.?\d*)")
 _FORCE_HEADER = "TOTAL-FORCE"
 
